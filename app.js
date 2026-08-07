@@ -8,21 +8,79 @@ const colors={containerNumber:"#ef4444",sealNo:"#22c55e",booking:"#3b82f6"};
 function norm(v){return String(v||"").toUpperCase().replace(/\s+/g,"").replace(/[-_/.:,;|()[\]{}]/g,"")}
 function clean(v){return String(v||"").toUpperCase().replace(/[^A-Z0-9]/g,"")}
 
-function repairContainer(v){
-  const raw=clean(v), outs=[];
-  for(let i=0;i<=raw.length-11;i++){
-    const s=raw.slice(i,i+11),
-      p=s.slice(0,4).replace(/0/g,"O").replace(/1/g,"I").replace(/5/g,"S").replace(/8/g,"B"),
-      n=s.slice(4).replace(/O/g,"0").replace(/[IL]/g,"1").replace(/Z/g,"2").replace(/S/g,"5").replace(/B/g,"8").replace(/G/g,"6"),
-      x=p+n;
-    if(/^[A-Z]{4}\d{7}$/.test(x)) outs.push(x);
+const ISO_VALUES=(()=>{
+  const map={};let n=10;
+  for(const ch of "ABCDEFGHIJKLMNOPQRSTUVWXYZ"){
+    while(n%11===0)n++;
+    map[ch]=n;n++;
   }
-  return [...new Set(outs)];
+  return map;
+})();
+
+function isoCheckDigit(code10){
+  if(!/^[A-Z]{4}\d{6}$/.test(code10)) return null;
+  let sum=0;
+  for(let i=0;i<code10.length;i++){
+    const ch=code10[i];
+    const v=/\d/.test(ch)?Number(ch):ISO_VALUES[ch];
+    sum+=v*(2**i);
+  }
+  return (sum%11)%10;
+}
+
+function isValidContainer(code){
+  const c=clean(code);
+  if(!/^[A-Z]{4}\d{7}$/.test(c)) return false;
+  return isoCheckDigit(c.slice(0,10))===Number(c[10]);
+}
+
+function baseContainerCandidates(v){
+  const raw=clean(v),out=[];
+  for(let i=0;i<=raw.length-11;i++){
+    const s=raw.slice(i,i+11);
+    const p=s.slice(0,4)
+      .replace(/0/g,"O").replace(/1/g,"I").replace(/5/g,"S").replace(/8/g,"B");
+    const n=s.slice(4)
+      .replace(/O/g,"0").replace(/[IL]/g,"1").replace(/Z/g,"2")
+      .replace(/S/g,"5").replace(/B/g,"8").replace(/G/g,"6");
+    const x=p+n;
+    if(/^[A-Z]{4}\d{7}$/.test(x)) out.push(x);
+  }
+  return [...new Set(out)];
+}
+
+function containerCorrectionCandidates(code){
+  const c=clean(code);
+  if(!/^[A-Z]{4}\d{7}$/.test(c)) return [];
+  const results=new Set([c]);
+
+  // OCR confusion candidates, applied sparingly.
+  const digitSubs={
+    "0":["8","6"],"1":["7"],"2":["7"],"3":["8"],"4":["9"],
+    "5":["6","8"],"6":["5","8"],"7":["1","2"],"8":["3","5","6","9"],"9":["4","8"]
+  };
+
+  // Try one digit change in serial/check area.
+  for(let i=4;i<11;i++){
+    const ch=c[i];
+    for(const alt of (digitSubs[ch]||[])){
+      results.add(c.slice(0,i)+alt+c.slice(i+1));
+    }
+  }
+  return [...results].filter(isValidContainer);
 }
 
 function parseCandidates(field,text){
   const raw=String(text||"").toUpperCase();
-  if(field==="containerNumber") return repairContainer(raw);
+
+  if(field==="containerNumber"){
+    const all=new Set();
+    for(const base of baseContainerCandidates(raw)){
+      all.add(base);
+      for(const corrected of containerCorrectionCandidates(base)) all.add(corrected);
+    }
+    return [...all];
+  }
 
   const tokens=(raw.match(/[A-Z0-9][A-Z0-9\-_/]{4,20}/g)||[])
     .map(clean).filter(x=>/[A-Z]/.test(x)&&/\d/.test(x));
@@ -86,6 +144,7 @@ function openCalibration(side){
   const img=images[side],maxW=1000,sc=Math.min(1,maxW/img.naturalWidth);
   cal.width=Math.round(img.naturalWidth*sc);cal.height=Math.round(img.naturalHeight*sc);redrawCal()
 }
+
 function redrawCal(){
   const img=images[modalSide];cctx.clearRect(0,0,cal.width,cal.height);cctx.drawImage(img,0,0,cal.width,cal.height);
   for(const [k,b] of Object.entries(tempBoxes)){
@@ -95,6 +154,7 @@ function redrawCal(){
     cctx.font="bold 16px Arial";cctx.fillText(labels[k],x+4,Math.max(18,y-4));cctx.restore()
   }
 }
+
 document.querySelectorAll(".field").forEach(b=>b.addEventListener("click",()=>{
   document.querySelectorAll(".field").forEach(x=>x.classList.remove("active"));b.classList.add("active");activeField=b.dataset.field
 }));
@@ -111,7 +171,7 @@ document.querySelector("#closeModal").addEventListener("click",()=>document.quer
 
 function crop(side,field){
   const img=images[side],b=boxes[side][field];if(!img||!b)return null;
-  const sx=Math.round(b.x*img.naturalWidth),sy=Math.round(b.y*img.naturalHeight),sw=Math.round(b.w*img.naturalWidth),sh=Math.round(b.h*img.naturalHeight),scale=8,c=document.createElement("canvas");
+  const sx=Math.round(b.x*img.naturalWidth),sy=Math.round(b.y*img.naturalHeight),sw=Math.round(b.w*img.naturalWidth),sh=Math.round(b.h*img.naturalHeight),scale=9,c=document.createElement("canvas");
   c.width=Math.max(1,sw*scale);c.height=Math.max(1,sh*scale);
   const x=c.getContext("2d",{willReadFrequently:true});x.imageSmoothingEnabled=true;x.imageSmoothingQuality="high";
   x.drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);return c
@@ -124,10 +184,9 @@ function prep(src,mode,threshold=190){
   const im=x.getImageData(0,0,c.width,c.height),d=im.data;
   for(let i=0;i<d.length;i+=4){
     const g=Math.round(d[i]*.299+d[i+1]*.587+d[i+2]*.114);let v=g;
-    if(mode==="contrast")v=Math.max(0,Math.min(255,(g-128)*2.8+128));
+    if(mode==="contrast")v=Math.max(0,Math.min(255,(g-128)*3.0+128));
     if(mode==="threshold")v=g<threshold?0:255;
     if(mode==="soft")v=g<205?30:255;
-    if(mode==="invert")v=255-g;
     d[i]=d[i+1]=d[i+2]=v
   }
   x.putImageData(im,0,0);return c
@@ -135,9 +194,9 @@ function prep(src,mode,threshold=190){
 
 async function readCropCandidates(worker,field,c){
   const passes=[
-    ["original",7,190],["contrast",7,190],["threshold",7,160],["threshold",7,175],
-    ["threshold",7,190],["threshold",7,205],["soft",7,190],["contrast",8,190],
-    ["contrast",13,190]
+    ["original",7,190],["contrast",7,190],["threshold",7,150],["threshold",7,165],
+    ["threshold",7,180],["threshold",7,195],["threshold",7,210],["soft",7,190],
+    ["contrast",8,190],["contrast",13,190]
   ];
   const score=new Map();
   const raw=[];
@@ -149,29 +208,49 @@ async function readCropCandidates(worker,field,c){
       user_defined_dpi:"300",
       tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
     });
+
     const r=await worker.recognize(prep(c,mode,t));
     const txt=r.data.text||"", conf=Number(r.data.confidence||0);
-    raw.push(`${mode}/${psm}/${t}: ${txt.trim()}`);
+    raw.push({mode,psm,t,txt,conf});
+
     for(const value of parseCandidates(field,txt)){
-      const old=score.get(value)||{value,count:0,conf:0};
-      old.count++;old.conf+=conf;score.set(value,old)
+      const old=score.get(value)||{value,count:0,conf:0,maxConf:0};
+      old.count++;old.conf+=conf;old.maxConf=Math.max(old.maxConf,conf);
+      score.set(value,old)
     }
   }
 
-  const ranked=[...score.values()].sort((a,b)=>b.count-a.count||b.conf-a.conf);
+  let ranked=[...score.values()].sort((a,b)=>b.count-a.count||b.maxConf-a.maxConf||b.conf-a.conf);
+
+  // For container, valid ISO candidates get a major boost.
+  if(field==="containerNumber"){
+    ranked=ranked.sort((a,b)=>{
+      const av=isValidContainer(a.value)?1:0,bv=isValidContainer(b.value)?1:0;
+      if(av!==bv)return bv-av;
+      return b.count-a.count||b.maxConf-a.maxConf||b.conf-a.conf
+    });
+  }
+
   return {ranked,raw}
 }
 
 function bestCrossPair(field,aList,bList){
   let best=null;
-  for(const a of aList.slice(0,12)){
-    for(const b of bList.slice(0,12)){
+  for(const a of aList.slice(0,15)){
+    for(const b of bList.slice(0,15)){
       const sim=similarity(a.value,b.value);
       const exact=norm(a.value)===norm(b.value);
       const support=a.count+b.count;
-      // Cross-document exact agreement is strongest evidence.
-      const score=(exact?1000:0)+(sim*100)+(support*8)+((a.conf+b.conf)/100);
-      if(!best||score>best.score)best={a,b,sim,exact,score}
+      const confidence=(a.maxConf+b.maxConf)/2;
+
+      let score=(exact?1200:0)+(sim*100)+(support*10)+(confidence/10);
+
+      if(field==="containerNumber"){
+        if(isValidContainer(a.value))score+=250;
+        if(isValidContainer(b.value))score+=250;
+      }
+
+      if(!best||score>best.score)best={a,b,sim,exact,support,confidence,score}
     }
   }
   return best
@@ -179,20 +258,44 @@ function bestCrossPair(field,aList,bList){
 
 function verdict(field,pair){
   if(!pair)return {status:"missing",text:"OCR อ่านไม่ครบ"};
-  if(pair.exact)return {status:"pass",text:"ตรงกัน"};
 
-  // If OCR outputs are close, don't incorrectly call the documents different.
-  const maxDist=field==="sealNo"?1:field==="containerNumber"?2:2;
   const dist=editDistance(pair.a.value,pair.b.value);
-  if(dist<=maxDist && pair.sim>=0.82)
-    return {status:"uncertain",text:"OCR ไม่ชัวร์"};
+
+  if(pair.exact){
+    if(field==="containerNumber" && (!isValidContainer(pair.a.value)||!isValidContainer(pair.b.value)))
+      return {status:"uncertain",text:"OCR ตรงกันแต่ Container ไม่ผ่าน ISO"};
+    if(pair.confidence<35)
+      return {status:"uncertain",text:"OCR ตรงกันแต่ความมั่นใจต่ำ"};
+    return {status:"pass",text:"ตรงกัน"};
+  }
+
+  if(field==="containerNumber"){
+    // Never call "not equal" confidently if one/both OCR readings fail ISO.
+    if(!isValidContainer(pair.a.value)||!isValidContainer(pair.b.value))
+      return {status:"uncertain",text:"OCR ไม่ชัวร์ — Container ไม่ผ่าน ISO"};
+
+    if(dist<=2 && pair.sim>=0.82)
+      return {status:"uncertain",text:"OCR ไม่ชัวร์"};
+  }
+
+  if(field==="sealNo"){
+    if(pair.confidence<45 || dist<=1)
+      return {status:"uncertain",text:"OCR ไม่ชัวร์"};
+  }
+
+  if(field==="booking"){
+    if(pair.confidence<50 || (dist<=2 && pair.sim>=0.82))
+      return {status:"uncertain",text:"OCR ไม่ชัวร์"};
+  }
 
   return {status:"fail",text:"ไม่ตรงกัน"}
 }
 
 function setProgress(p,t){
   document.querySelector("#progressWrap").classList.remove("hidden");
-  document.querySelector("#bar").style.width=`${p}%`;document.querySelector("#progressPct").textContent=`${Math.round(p)}%`;document.querySelector("#progressText").textContent=t
+  document.querySelector("#bar").style.width=`${p}%`;
+  document.querySelector("#progressPct").textContent=`${Math.round(p)}%`;
+  document.querySelector("#progressText").textContent=t
 }
 
 document.querySelector("#checkBtn").addEventListener("click",async()=>{
@@ -201,10 +304,11 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
   if([0,1].some(s=>fields.some(k=>!boxes[s]?.[k]))){err.textContent="กรุณากำหนดกรอบอ่านของข้อมูล 1 และข้อมูล 2 ให้ครบก่อน";err.classList.remove("hidden");return}
 
   const btn=document.querySelector("#checkBtn");btn.disabled=true;
+
   try{
     const candidateData=[{},{}];
     const worker=await Tesseract.createWorker("eng",1,{logger:m=>{
-      if(m.status==="recognizing text")setProgress(10+(m.progress||0)*80,"กำลังอ่านหลายรอบและหาค่าที่น่าเชื่อถือ...")
+      if(m.status==="recognizing text")setProgress(10+(m.progress||0)*80,"กำลังอ่านหลายรอบและตรวจความน่าเชื่อถือ...")
     }});
 
     for(let s=0;s<2;s++){
@@ -221,24 +325,24 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
       resolved[f]={pair,verdict:verdict(f,pair)}
     }
 
-    renderConsensus(resolved);
+    renderValidated(resolved);
     setProgress(100,"อ่านและเปรียบเทียบเสร็จแล้ว")
   }catch(e){
     err.textContent=`เกิดข้อผิดพลาด: ${e?.message||e}`;err.classList.remove("hidden")
   }finally{btn.disabled=false}
 });
 
-function renderConsensus(resolved){
+function renderValidated(resolved){
   const tbody=document.querySelector("#tbody");tbody.innerHTML="";
   const mismatches=[],uncertain=[],missing=[];
 
   for(const f of fields){
-    const r=resolved[f], pair=r.pair;
+    const r=resolved[f],pair=r.pair;
     const a=pair?.a?.value||"",b=pair?.b?.value||"";
+
     let cls="missing";
     if(r.verdict.status==="pass")cls="pass";
     if(r.verdict.status==="fail")cls="fail";
-    if(r.verdict.status==="uncertain")cls="missing";
 
     if(r.verdict.status==="fail")mismatches.push(labels[f]);
     if(r.verdict.status==="uncertain")uncertain.push(labels[f]);
@@ -255,13 +359,16 @@ function renderConsensus(resolved){
   const overall=document.querySelector("#overall"),sum=document.querySelector("#mismatchSummary");
 
   if(!mismatches.length&&!uncertain.length&&!missing.length){
-    overall.className="overall pass";overall.textContent="ผ่านการตรวจสอบ";
-    sum.textContent="ทั้ง 3 หัวข้อตรงกันจาก OCR consensus"
+    overall.className="overall pass";
+    overall.textContent="ผ่านการตรวจสอบ";
+    sum.textContent="ทั้ง 3 หัวข้อตรงกัน และ Container ผ่าน ISO 6346"
   }else if(mismatches.length){
-    overall.className="overall fail";overall.textContent="ไม่ผ่านการตรวจสอบ";
-    sum.textContent=`หัวข้อที่ยืนยันว่าไม่ตรง: ${mismatches.join(", ")}${uncertain.length?` | OCR ยังไม่ชัวร์: ${uncertain.join(", ")}`:""}`
+    overall.className="overall fail";
+    overall.textContent="ไม่ผ่านการตรวจสอบ";
+    sum.textContent=`หัวข้อที่ยืนยันว่าไม่ตรง: ${mismatches.join(", ")}${uncertain.length?` | OCR ไม่ชัวร์: ${uncertain.join(", ")}`:""}`
   }else{
-    overall.className="overall fail";overall.textContent="ยังยืนยันผลไม่ได้";
+    overall.className="overall fail";
+    overall.textContent="ยังยืนยันผลไม่ได้";
     const parts=[];
     if(uncertain.length)parts.push(`OCR ไม่ชัวร์: ${uncertain.join(", ")}`);
     if(missing.length)parts.push(`อ่านไม่ครบ: ${missing.join(", ")}`);
