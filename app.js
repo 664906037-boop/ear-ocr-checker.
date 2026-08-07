@@ -236,6 +236,215 @@ function crop(side,field){
   const x=c.getContext("2d",{willReadFrequently:true});x.imageSmoothingEnabled=true;x.imageSmoothingQuality="high";x.drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);return c
 }
 
+
+function cropByBox(side,b,scale=10){
+  const img=images[side];
+  if(!img||!b)return null;
+
+  const x=Math.max(0,Math.min(0.98,b.x));
+  const y=Math.max(0,Math.min(0.98,b.y));
+  const w=Math.max(0.01,Math.min(1-x,b.w));
+  const h=Math.max(0.01,Math.min(1-y,b.h));
+
+  const sx=Math.round(x*img.naturalWidth);
+  const sy=Math.round(y*img.naturalHeight);
+  const sw=Math.max(1,Math.round(w*img.naturalWidth));
+  const sh=Math.max(1,Math.round(h*img.naturalHeight));
+
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,sw*scale);
+  c.height=Math.max(1,sh*scale);
+
+  const ctx=c.getContext("2d",{willReadFrequently:true});
+  ctx.imageSmoothingEnabled=true;
+  ctx.imageSmoothingQuality="high";
+  ctx.drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c;
+}
+
+function smartBoxes(side,field){
+  const base=boxes[side]?.[field];
+  if(!base)return [];
+
+  // The saved ROI is the center of the search, not a hard crop.
+  // Shift amounts are relative to the ROI itself so different resolutions behave consistently.
+  const dx=Math.max(0.006,base.w*0.18);
+  const dy=Math.max(0.004,base.h*0.45);
+
+  const variants=[
+    {name:"center",x:base.x,y:base.y,w:base.w,h:base.h,penalty:0},
+
+    {name:"left",x:base.x-dx,y:base.y,w:base.w,h:base.h,penalty:4},
+    {name:"right",x:base.x+dx,y:base.y,w:base.w,h:base.h,penalty:4},
+    {name:"up",x:base.x,y:base.y-dy,w:base.w,h:base.h,penalty:4},
+    {name:"down",x:base.x,y:base.y+dy,w:base.w,h:base.h,penalty:4},
+
+    // Small expansion catches values that drift partly outside the learned ROI.
+    {name:"expand",
+      x:base.x-base.w*0.12,
+      y:base.y-base.h*0.35,
+      w:base.w*1.24,
+      h:base.h*1.70,
+      penalty:6},
+
+    // Horizontal drift is most common in photographed forms.
+    {name:"wide-left",
+      x:base.x-base.w*0.28,
+      y:base.y-base.h*0.20,
+      w:base.w*1.34,
+      h:base.h*1.40,
+      penalty:8},
+
+    {name:"wide-right",
+      x:base.x-base.w*0.06,
+      y:base.y-base.h*0.20,
+      w:base.w*1.34,
+      h:base.h*1.40,
+      penalty:8}
+  ];
+
+  return variants.map(v=>({
+    ...v,
+    x:Math.max(0,v.x),
+    y:Math.max(0,v.y),
+    w:Math.min(v.w,1-Math.max(0,v.x)),
+    h:Math.min(v.h,1-Math.max(0,v.y))
+  })).filter(v=>v.w>0.01&&v.h>0.01);
+}
+
+function candidateLooksStrong(field,item){
+  if(!item)return false;
+
+  if(field==="containerNumber"){
+    return isValidContainer(item.value) && item.count>=2 && item.maxConf>=40;
+  }
+
+  if(field==="sealNo"){
+    return fieldShapeScore(field,item.value)>=60 && item.count>=2 && item.maxConf>=38;
+  }
+
+  if(field==="booking"){
+    return bookingReferenceShape(bookingNormalizeCandidate(item.value))
+      && item.count>=2
+      && item.maxConf>=38;
+  }
+
+  return false;
+}
+
+async function readCropCandidatesLite(worker,field,c){
+  const passes=[
+    ["original",7,190],
+    ["sharp",7,190],
+    ["contrast",7,190],
+    ["threshold",7,170],
+    ["threshold",7,195],
+    ["contrast",8,190]
+  ];
+
+  const score=new Map();
+
+  for(const [mode,psm,t] of passes){
+    await worker.setParameters({
+      tessedit_pageseg_mode:String(psm),
+      preserve_interword_spaces:"1",
+      user_defined_dpi:"300",
+      tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
+    });
+
+    const r=await worker.recognize(prep(c,mode,t));
+    const txt=r.data.text||"";
+    const conf=Number(r.data.confidence||0);
+
+    for(const value of parseCandidates(field,txt)){
+      const old=score.get(value)||{value,count:0,conf:0,maxConf:0};
+      old.count++;
+      old.conf+=conf;
+      old.maxConf=Math.max(old.maxConf,conf);
+      score.set(value,old);
+    }
+  }
+
+  return [...score.values()].sort(
+    (a,b)=>b.count-a.count||b.maxConf-a.maxConf||b.conf-a.conf
+  );
+}
+
+async function readSmartCandidates(worker,side,field){
+  const variants=smartBoxes(side,field);
+  if(!variants.length)return [];
+
+  const merged=new Map();
+
+  // 1) Always read the exact learned position with the proven V15/V18 full pipeline.
+  const center=variants[0];
+  const centerCrop=cropByBox(side,center,12);
+  const centerRanked=await readCropCandidates(worker,field,centerCrop);
+
+  for(const item of centerRanked){
+    const old=merged.get(item.value)||{
+      value:item.value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
+    };
+    old.count+=item.count*2; // center gets strongest weight
+    old.conf+=item.conf*2;
+    old.maxConf=Math.max(old.maxConf,item.maxConf);
+    old.positionScore+=20;
+    old.sources.push("center");
+    merged.set(item.value,old);
+  }
+
+  // If center is already excellent, preserve proven behavior and avoid unnecessary scans.
+  if(candidateLooksStrong(field,centerRanked[0])){
+    return [...merged.values()].sort((a,b)=>
+      (b.positionScore+b.count*10+b.maxConf/5)-
+      (a.positionScore+a.count*10+a.maxConf/5)
+    );
+  }
+
+  // 2) Search around the remembered region only when center is weak.
+  for(const variant of variants.slice(1)){
+    const c=cropByBox(side,variant,9);
+    const ranked=await readCropCandidatesLite(worker,field,c);
+
+    for(const item of ranked){
+      const old=merged.get(item.value)||{
+        value:item.value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
+      };
+
+      old.count+=item.count;
+      old.conf+=item.conf;
+      old.maxConf=Math.max(old.maxConf,item.maxConf);
+
+      // Nearby results are useful, but center remains preferred when evidence is equal.
+      old.positionScore+=Math.max(1,12-variant.penalty);
+      old.sources.push(variant.name);
+      merged.set(item.value,old);
+    }
+  }
+
+  let ranked=[...merged.values()].sort((a,b)=>{
+    let aBonus=0,bBonus=0;
+
+    if(field==="containerNumber"){
+      if(isValidContainer(a.value))aBonus+=120;
+      if(isValidContainer(b.value))bBonus+=120;
+    }else{
+      aBonus+=fieldShapeScore(field,a.value);
+      bBonus+=fieldShapeScore(field,b.value);
+      if(field==="booking"){
+        aBonus+=bookingShapeBonus(a.value);
+        bBonus+=bookingShapeBonus(b.value);
+      }
+    }
+
+    const as=aBonus+a.positionScore+a.count*10+a.maxConf/4;
+    const bs=bBonus+b.positionScore+b.count*10+b.maxConf/4;
+    return bs-as;
+  });
+
+  return ranked;
+}
+
 function sharpenCanvas(src){
   const out=document.createElement("canvas");out.width=src.width;out.height=src.height;
   const ctx=out.getContext("2d",{willReadFrequently:true});ctx.drawImage(src,0,0);
@@ -684,7 +893,7 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
     const worker=await Tesseract.createWorker("eng",1,{
       logger:m=>{
         if(m.status==="recognizing text"){
-          setProgress(10+(m.progress||0)*80,"กำลังอ่านและตรวจความถูกต้อง...")
+          setProgress(10+(m.progress||0)*80,"กำลังสแกนบริเวณที่จดจำและตรวจความถูกต้อง...")
         }
       }
     });
@@ -692,7 +901,7 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
     // Always use the proven V15 ROI OCR for EAR.
     for(const f of fields){
       setProgress(10+fields.indexOf(f)*17,`อ่าน ${labels[f]} — ใบ EAR`);
-      candidateData[0][f]=await readCropCandidates(worker,f,crop(0,f));
+      candidateData[0][f]=await readSmartCandidates(worker,0,f);
     }
 
     // Prefer exact native PDF text for File 2; fallback to V15 ROI OCR.
@@ -706,7 +915,7 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
         }];
       }else{
         setProgress(62+fields.indexOf(f)*10,`อ่าน ${labels[f]} — แบบฟอร์มควบคุมรถ`);
-        candidateData[1][f]=await readCropCandidates(worker,f,crop(1,f));
+        candidateData[1][f]=await readSmartCandidates(worker,1,f);
       }
     }
 
