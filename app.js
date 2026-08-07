@@ -333,13 +333,11 @@ function candidateLooksStrong(field,item){
 }
 
 async function readCropCandidatesLite(worker,field,c){
+  // Fast fallback only: three complementary passes.
   const passes=[
-    ["original",7,190],
     ["sharp",7,190],
     ["contrast",7,190],
-    ["threshold",7,170],
-    ["threshold",7,195],
-    ["contrast",8,190]
+    ["threshold",7,180]
   ];
 
   const score=new Map();
@@ -370,79 +368,168 @@ async function readCropCandidatesLite(worker,field,c){
   );
 }
 
-async function readSmartCandidates(worker,side,field){
+function learnedPatternScore(field,value){
+  const v=clean(value);
+
+  if(field==="containerNumber"){
+    // Exact business rule: 4 letters + 7 digits + ISO check digit.
+    return isValidContainer(v)?200:0;
+  }
+
+  if(field==="sealNo"){
+    // Samples are predominantly alphabetic prefix followed by digits.
+    let s=fieldShapeScore(field,v);
+    if(/^[A-Z]{4}\d{5,9}$/.test(v))s+=80;
+    if(/^TH[A-Z]{2}\d{5,9}$/.test(v))s+=35;
+    return s;
+  }
+
+  if(field==="booking"){
+    const n=bookingNormalizeCandidate(v);
+    let s=bookingShapeBonus(n)+fieldShapeScore(field,n);
+    if(/^SGZG\d{7,9}$/.test(n))s+=100;
+    if(/^BSGZC\d{7,9}$/.test(n))s+=80;
+    if(/^[A-Z]{4,5}\d{7,9}$/.test(n))s+=50;
+    return s;
+  }
+
+  return 0;
+}
+
+function learnedCandidateStrong(field,item){
+  if(!item)return false;
+  const pattern=learnedPatternScore(field,item.value);
+
+  if(field==="containerNumber"){
+    return pattern>=200 && item.maxConf>=32;
+  }
+
+  // One good read is enough to avoid unnecessary fallback scans
+  // when the value has the correct field shape.
+  return pattern>=100 && item.maxConf>=42;
+}
+
+async function readCenterFast(worker,side,field){
   const variants=smartBoxes(side,field);
   if(!variants.length)return [];
 
+  const c=cropByBox(side,variants[0],10);
+  const passes=[
+    ["sharp",7,190],
+    ["contrast",7,190],
+    ["threshold",7,180]
+  ];
+
+  const score=new Map();
+
+  for(const [mode,psm,t] of passes){
+    await worker.setParameters({
+      tessedit_pageseg_mode:String(psm),
+      preserve_interword_spaces:"1",
+      user_defined_dpi:"300",
+      tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
+    });
+
+    const r=await worker.recognize(prep(c,mode,t));
+    const txt=r.data.text||"";
+    const conf=Number(r.data.confidence||0);
+
+    for(let value of parseCandidates(field,txt)){
+      if(field==="booking")value=bookingNormalizeCandidate(value);
+
+      const old=score.get(value)||{
+        value,count:0,conf:0,maxConf:0,positionScore:30,sources:["center-fast"]
+      };
+      old.count++;
+      old.conf+=conf;
+      old.maxConf=Math.max(old.maxConf,conf);
+      score.set(value,old);
+    }
+  }
+
+  return [...score.values()].sort((a,b)=>{
+    const as=learnedPatternScore(field,a.value)+a.count*15+a.maxConf/3;
+    const bs=learnedPatternScore(field,b.value)+b.count*15+b.maxConf/3;
+    return bs-as;
+  });
+}
+
+async function readSmartCandidates(worker,side,field){
+  // Stage 1: very fast read from the remembered center.
+  const centerRanked=await readCenterFast(worker,side,field);
+
+  if(learnedCandidateStrong(field,centerRanked[0])){
+    return centerRanked;
+  }
+
+  // Stage 2: center uncertain -> search only four nearest offsets first.
+  const variants=smartBoxes(side,field);
   const merged=new Map();
 
-  // 1) Always read the exact learned position with the proven V15/V18 full pipeline.
-  const center=variants[0];
-  const centerCrop=cropByBox(side,center,12);
-  const centerRanked=await readCropCandidates(worker,field,centerCrop);
-
   for(const item of centerRanked){
-    const old=merged.get(item.value)||{
-      value:item.value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
-    };
-    old.count+=item.count*2; // center gets strongest weight
-    old.conf+=item.conf*2;
-    old.maxConf=Math.max(old.maxConf,item.maxConf);
-    old.positionScore+=20;
-    old.sources.push("center");
-    merged.set(item.value,old);
+    merged.set(item.value,{...item});
   }
 
-  // If center is already excellent, preserve proven behavior and avoid unnecessary scans.
-  if(candidateLooksStrong(field,centerRanked[0])){
-    return [...merged.values()].sort((a,b)=>
-      (b.positionScore+b.count*10+b.maxConf/5)-
-      (a.positionScore+a.count*10+a.maxConf/5)
-    );
-  }
+  const near=variants.filter(v=>["left","right","up","down"].includes(v.name));
 
-  // 2) Search around the remembered region only when center is weak.
-  for(const variant of variants.slice(1)){
-    const c=cropByBox(side,variant,9);
+  for(const variant of near){
+    const c=cropByBox(side,variant,8);
     const ranked=await readCropCandidatesLite(worker,field,c);
 
-    for(const item of ranked){
-      const old=merged.get(item.value)||{
-        value:item.value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
-      };
+    for(let item of ranked){
+      let value=item.value;
+      if(field==="booking")value=bookingNormalizeCandidate(value);
 
+      const old=merged.get(value)||{
+        value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
+      };
       old.count+=item.count;
       old.conf+=item.conf;
       old.maxConf=Math.max(old.maxConf,item.maxConf);
-
-      // Nearby results are useful, but center remains preferred when evidence is equal.
-      old.positionScore+=Math.max(1,12-variant.penalty);
+      old.positionScore+=8;
       old.sources.push(variant.name);
-      merged.set(item.value,old);
+      merged.set(value,old);
     }
   }
 
   let ranked=[...merged.values()].sort((a,b)=>{
-    let aBonus=0,bBonus=0;
-
-    if(field==="containerNumber"){
-      if(isValidContainer(a.value))aBonus+=120;
-      if(isValidContainer(b.value))bBonus+=120;
-    }else{
-      aBonus+=fieldShapeScore(field,a.value);
-      bBonus+=fieldShapeScore(field,b.value);
-      if(field==="booking"){
-        aBonus+=bookingShapeBonus(a.value);
-        bBonus+=bookingShapeBonus(b.value);
-      }
-    }
-
-    const as=aBonus+a.positionScore+a.count*10+a.maxConf/4;
-    const bs=bBonus+b.positionScore+b.count*10+b.maxConf/4;
+    const as=learnedPatternScore(field,a.value)+a.positionScore+a.count*12+a.maxConf/3;
+    const bs=learnedPatternScore(field,b.value)+b.positionScore+b.count*12+b.maxConf/3;
     return bs-as;
   });
 
-  return ranked;
+  if(learnedCandidateStrong(field,ranked[0])){
+    return ranked;
+  }
+
+  // Stage 3: only difficult images use the wider search.
+  const wide=variants.filter(v=>["expand","wide-left","wide-right"].includes(v.name));
+
+  for(const variant of wide){
+    const c=cropByBox(side,variant,8);
+    const sub=await readCropCandidatesLite(worker,field,c);
+
+    for(let item of sub){
+      let value=item.value;
+      if(field==="booking")value=bookingNormalizeCandidate(value);
+
+      const old=merged.get(value)||{
+        value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
+      };
+      old.count+=item.count;
+      old.conf+=item.conf;
+      old.maxConf=Math.max(old.maxConf,item.maxConf);
+      old.positionScore+=5;
+      old.sources.push(variant.name);
+      merged.set(value,old);
+    }
+  }
+
+  return [...merged.values()].sort((a,b)=>{
+    const as=learnedPatternScore(field,a.value)+a.positionScore+a.count*12+a.maxConf/3;
+    const bs=learnedPatternScore(field,b.value)+b.positionScore+b.count*12+b.maxConf/3;
+    return bs-as;
+  });
 }
 
 function sharpenCanvas(src){
@@ -893,7 +980,7 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
     const worker=await Tesseract.createWorker("eng",1,{
       logger:m=>{
         if(m.status==="recognizing text"){
-          setProgress(10+(m.progress||0)*80,"กำลังสแกนบริเวณที่จดจำและตรวจความถูกต้อง...")
+          setProgress(10+(m.progress||0)*80,"กำลังอ่านตำแหน่งที่จดจำ...")
         }
       }
     });
