@@ -1,14 +1,14 @@
-# EAR Vehicle Checker — Booking Refined V14
+# EAR Vehicle Checker — Booking Stable V15
 
-โฟกัสเฉพาะ BOOKING
+โฟกัสเฉพาะความเสถียรของ BOOKING
 
-เพิ่ม:
-- Booking-specific prefix/digit zoning
-- แก้ OCR ใน prefix: 2->Z, 0->O, 1->I, 6->G ฯลฯ
-- แก้ OCR ใน numeric suffix: O->0, I/L->1, Z->2, G->6 ฯลฯ
-- รองรับรูปแบบที่พบจริง เช่น SGZG06748700, SGZG07601300, SGZG06692500, BSGZC26001315
-- ใช้ candidate จาก File 1 และ File 2 มาสร้าง booking consensus
-- ถ้า consensus มีรูปแบบสมเหตุสมผล จะแสดง “ตรงกันหลังแก้ OCR”
-- Container และ Seal logic จาก V13 คงเดิม
+เพิ่มจาก V14:
+- ให้ File 2 (แบบฟอร์มควบคุมรถ) เป็น reference ที่มีน้ำหนักมากกว่าเฉพาะ Booking
+- auto-correct File 1 ตาม File 2 เฉพาะเมื่อความยาวเท่ากัน ต่างกันไม่เกิน 2 ตัว
+- File 2 ต้องมีรูปแบบ Booking สมเหตุสมผล: 4-5 ตัวอักษร + 7-9 ตัวเลข
+- ความต่างต้องอยู่ในกลุ่ม OCR confusion ที่คาดได้ เช่น I/Z, 6/0, 2/Z, O/0, I/1
+- similarity รวมต้อง >= 0.80
+- ถ้าไม่เข้าเงื่อนไข ระบบจะไม่บังคับให้ตรง
 
-ใช้ calibration boxes เดิมได้
+Container และ Seal logic จาก V14 คงเดิม
+Calibration boxes เดิมใช้ต่อได้

@@ -357,6 +357,49 @@ function bookingShapeBonus(v){
   return score;
 }
 
+
+function bookingReferenceShape(v){
+  const x=bookingNormalizeCandidate(v);
+  return /^[A-Z]{4,5}\d{7,9}$/.test(x);
+}
+
+function bookingMismatchProfile(a,b){
+  const x=bookingNormalizeCandidate(a);
+  const y=bookingNormalizeCandidate(b);
+  if(!x || !y || x.length!==y.length) return null;
+
+  const diffs=[];
+  for(let i=0;i<x.length;i++){
+    if(x[i]!==y[i]) diffs.push({i,a:x[i],b:y[i]});
+  }
+  return {x,y,diffs};
+}
+
+function bookingSafeAutoResolve(file1Value,file2Value){
+  const p=bookingMismatchProfile(file1Value,file2Value);
+  if(!p) return null;
+
+  if(!bookingReferenceShape(p.y)) return null;
+  if(p.diffs.length===0) return p.y;
+  if(p.diffs.length>2) return null;
+
+  let allowed=0;
+  for(const d of p.diffs){
+    const pair=new Set([d.a,d.b]);
+    const isKnown =
+      charsConfusable(d.a,d.b) ||
+      (pair.has("I") && pair.has("Z")) ||
+      (pair.has("6") && pair.has("0")) ||
+      (pair.has("G") && pair.has("Z"));
+    if(isKnown) allowed++;
+  }
+
+  if(allowed!==p.diffs.length) return null;
+  if(similarity(p.x,p.y) < 0.80) return null;
+
+  return p.y;
+}
+
 function reconcile(field,aList,bList){
   let best=null;
 
@@ -411,11 +454,15 @@ function reconcile(field,aList,bList){
   best.canonical=stronger.value;
 
   if(field==="booking"){
-    const consensus=bookingConsensus(best.a.value,best.b.value);
-    if(consensus){
-      best.consensus=consensus;
-      if(norm(consensus)===norm(best.a.value)||norm(consensus)===norm(best.b.value)){
-        best.exact = norm(best.a.value)===norm(best.b.value);
+    const safeReference=bookingSafeAutoResolve(best.a.value,best.b.value);
+
+    if(safeReference){
+      best.consensus=safeReference;
+      best.referenceResolved=true;
+    }else{
+      const consensus=bookingConsensus(best.a.value,best.b.value);
+      if(consensus){
+        best.consensus=consensus;
       }
     }
   }else if(field!=="containerNumber"){
@@ -459,10 +506,13 @@ function verdict(field,p){
   }
 
   if(field==="booking"){
-    if(p.consensus && /^[A-Z]{4,5}\d{7,9}$/.test(p.consensus))
+    if(p.referenceResolved && p.consensus && bookingReferenceShape(p.consensus))
       return{status:"corrected",text:"ตรงกันหลังแก้ OCR"};
 
-    if(p.weighted<=2.2 || p.sim>=0.76 || p.confidence<60)
+    if(p.consensus && bookingReferenceShape(p.consensus))
+      return{status:"corrected",text:"ตรงกันหลังแก้ OCR"};
+
+    if(p.weighted<=2.4 || p.sim>=0.78 || p.confidence<62)
       return{status:"uncertain",text:"OCR ไม่ชัวร์"};
 
     return{status:"fail",text:"ไม่ตรงกัน"};
@@ -510,7 +560,8 @@ function renderResolved(resolved){
 
     let note="";
     if(r.verdict.status==="corrected"&&p?.consensus){
-      note=`<div style="font-size:11px;color:#067647;margin-top:4px">ค่าที่ระบบแก้ OCR: ${p.consensus}</div>`;
+      const reason=p.referenceResolved?"เทียบกับข้อมูล 2 ที่อ่านได้ชัดกว่า":"OCR consensus";
+      note=`<div style="font-size:11px;color:#067647;margin-top:4px">ค่าที่ระบบแก้ OCR: ${p.consensus} (${reason})</div>`;
       a=p.consensus;b=p.consensus;
     }else if(r.verdict.status==="uncertain"&&p?.canonical){
       note=`<div style="font-size:11px;color:#667085;margin-top:4px">ค่าที่น่าเชื่อถือกว่า: ${p.canonical}</div>`;
