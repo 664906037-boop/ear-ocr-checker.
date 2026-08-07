@@ -2,111 +2,72 @@
 <html lang="th">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EAR OCR Engine V1</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>EAR OCR Calibration V2</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
   <main class="wrap">
     <header class="hero">
-      <div>
-        <p class="eyebrow">EAR OCR ENGINE V1</p>
-        <h1>ทดสอบการอ่านข้อมูล EAR</h1>
-        <p class="sub">โฟกัสเฉพาะ CONTAINER NUMBER, SEAL NO และ BOOKING</p>
-      </div>
-      <span class="badge">FREE / BROWSER OCR</span>
+      <p class="eyebrow">EAR OCR CALIBRATION V2</p>
+      <h1>กำหนดกรอบอ่านข้อมูลด้วยตัวเอง</h1>
+      <p>ลากกรอบ 3 จุดครั้งเดียว แล้วระบบจะ OCR เฉพาะตำแหน่งที่คุณกำหนด</p>
     </header>
 
     <section class="panel">
-      <div class="upload">
-        <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf">
-        <label for="fileInput">
-          <strong>เลือกไฟล์ EAR</strong>
-          <span>รองรับ JPG, JPEG, PNG, WEBP และ PDF</span>
-        </label>
-        <div id="fileName">ยังไม่ได้เลือกไฟล์</div>
+      <div class="steps">
+        <span>1. เลือกรูป EAR</span><span>2. เลือกหัวข้อ</span>
+        <span>3. ลากกรอบบนภาพ</span><span>4. กดทดสอบ OCR</span>
       </div>
 
-      <div class="actions">
-        <button id="readBtn" class="primary">เริ่มอ่าน 3 ข้อมูล</button>
-        <button id="resetBtn" class="secondary">ล้างข้อมูล</button>
+      <div class="toolbar">
+        <label class="file-btn">เลือกรูป EAR<input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp"></label>
+        <button data-field="containerNumber" class="field active">1 — CONTAINER NUMBER</button>
+        <button data-field="sealNo" class="field">2 — SEAL NO</button>
+        <button data-field="booking" class="field">3 — BOOKING</button>
+        <button id="clearBoxes" class="secondary">ล้างกรอบ</button>
+        <button id="testBtn" class="primary">ทดสอบ OCR 3 กรอบ</button>
       </div>
 
-      <div id="progressWrap" class="progress-wrap hidden">
-        <div class="progress-track"><div id="progressBar"></div></div>
-        <div class="progress-row">
-          <span id="progressText">กำลังเตรียม...</span>
-          <span id="progressPercent">0%</span>
-        </div>
-      </div>
-
-      <div id="errorBox" class="error hidden"></div>
+      <p id="fileName" class="muted">ยังไม่ได้เลือกรูป</p>
+      <div id="message" class="message">เลือกรูป EAR แล้วลากกรอบเฉพาะ “ค่าจริง” ของแต่ละหัวข้อ</div>
     </section>
 
-    <section class="grid">
-      <div class="panel">
-        <h2>ภาพที่ระบบใช้</h2>
-        <div id="preview" class="preview">ตัวอย่างเอกสารจะแสดงที่นี่</div>
-      </div>
-
-      <div class="panel">
-        <h2>ผล OCR</h2>
-        <div class="results">
-                    <div class="result-row">
-            <div>
-              <span class="label">CONTAINER NUMBER</span>
-              <input id="containerNumber" readonly>
-            </div>
-            <span id="containerStatus" class="status waiting">รออ่าน</span>
-          </div>
-
-          <div class="result-row">
-            <div>
-              <span class="label">SEAL NO</span>
-              <input id="sealNo" readonly>
-            </div>
-            <span id="sealStatus" class="status waiting">รออ่าน</span>
-          </div>
-
-          <div class="result-row">
-            <div>
-              <span class="label">BOOKING</span>
-              <input id="booking" readonly>
-            </div>
-            <span id="bookingStatus" class="status waiting">รออ่าน</span>
-          </div>
-        </div>
-
-        <div id="summary" class="summary">
-          เลือกไฟล์ EAR แล้วกด “เริ่มอ่าน 3 ข้อมูล”
-        </div>
+    <section class="panel workspace">
+      <div id="canvasWrap">
+        <canvas id="docCanvas"></canvas>
+        <div id="emptyState">เลือกรูป EAR เพื่อเริ่มกำหนดกรอบ</div>
       </div>
     </section>
 
-    <section id="debugSection" class="panel hidden">
-      <div class="debug-head">
-        <div>
-          <p class="eyebrow dark">DEBUG / CALIBRATION</p>
-          <h2>กรอบที่ OCR อ่านจริง</h2>
-        </div>
-        <p>ส่วนนี้มีไว้ตรวจว่าระบบจับตำแหน่งถูกหรือไม่</p>
+    <section class="panel">
+      <h2>ตำแหน่งที่กำหนด</h2>
+      <div class="box-summary">
+        <div><strong>1 CONTAINER NUMBER</strong><span id="box-containerNumber">ยังไม่กำหนด</span></div>
+        <div><strong>2 SEAL NO</strong><span id="box-sealNo">ยังไม่กำหนด</span></div>
+        <div><strong>3 BOOKING</strong><span id="box-booking">ยังไม่กำหนด</span></div>
       </div>
-
-      <div id="cropGrid" class="crop-grid"></div>
-
-      <details>
-        <summary>ดูข้อความ OCR รอบแรก</summary>
-        <pre id="rawText"></pre>
-      </details>
     </section>
 
-    <section class="note panel">
-      <strong>เป้าหมายของ V1:</strong>
-      ยังไม่มีการเปรียบเทียบ 2 เอกสาร เว็บนี้ใช้ทดสอบว่า EAR อ่าน 3 ค่าได้ถูกก่อนเท่านั้น
+    <section class="panel">
+      <h2>ผลทดสอบ OCR</h2>
+      <div id="progressWrap" class="hidden">
+        <div class="progress"><div id="bar"></div></div>
+        <p id="progressText">กำลังอ่าน...</p>
+      </div>
+      <div class="results">
+        <div class="result"><span>CONTAINER NUMBER</span><input id="out-containerNumber" readonly><small id="raw-containerNumber"></small></div>
+        <div class="result"><span>SEAL NO</span><input id="out-sealNo" readonly><small id="raw-sealNo"></small></div>
+        <div class="result"><span>BOOKING</span><input id="out-booking" readonly><small id="raw-booking"></small></div>
+      </div>
+    </section>
+
+    <section class="panel note">
+      <strong>สำคัญ:</strong> ลากกรอบเฉพาะค่าจริง เช่น <code>ONEU2944860</code> ไม่ต้องครอบคำว่า CONTAINER NUMBER
+      ระบบจะบันทึกตำแหน่งไว้ใน Browser เครื่องนี้โดยอัตโนมัติ
     </section>
   </main>
-
   <script type="module" src="app.js"></script>
 </body>
 </html>
