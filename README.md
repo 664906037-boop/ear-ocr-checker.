@@ -1,28 +1,41 @@
-# EAR Vehicle Checker — Reference OCR V17
+# EAR Vehicle Checker — Production V18
 
-## เป้าหมาย
-ใช้งานจริงตาม workflow:
+เวอร์ชันนี้ยึด OCR Engine จาก V15 ซึ่งเป็นเวอร์ชันที่ผู้ใช้ทดสอบแล้วอ่านได้ดีที่สุด
+
+## Workflow จริง
+
+### ตั้งค่าครั้งแรก
 1. Upload ใบ EAR
-2. Upload แบบฟอร์มควบคุมรถ
-3. ระบบอ่านข้อมูล 2 ก่อนเป็น reference
-4. ระบบค้นหา 3 ค่าเดียวกันใน EAR
-5. Compare:
+2. กดตั้งค่ากรอบข้อมูล 1
+3. ลากเฉพาะค่าจริง:
    - CONTAINER NUMBER
    - SEAL NO
    - BOOKING
-6. ถ้าทั้ง 3 ผ่าน เปิดปุ่ม Print
-7. Print จะพิมพ์ "ไฟล์ข้อมูล 2 ตัวจริง" ไม่สร้างฟอร์มใหม่ จึงเหมือนเอกสารข้อมูล 2
+4. Save
+5. Upload แบบฟอร์มควบคุมรถ
+6. ถ้าเป็น PDF ที่มี text layer ระบบอ่านค่าโดยตรงและไม่ต้องตั้งกรอบข้อมูล 2
+7. ถ้าเป็นภาพหรือ PDF scan ให้ตั้งกรอบข้อมูล 2 ครั้งเดียว
+8. ระบบจำ Calibration ใน Browser/Production domain
 
-## เหตุผลที่ V17 เปลี่ยนวิธี OCR
-เวอร์ชันเก่า OCR File 1 และ File 2 แบบอิสระ ทำให้ OCR error ของสองฝั่งไม่เหมือนกัน
-V17 ใช้ File 2 ที่คมชัดกว่าเป็น reference แล้วตรวจว่า EAR มีค่าที่สอดคล้องกับ reference หรือไม่
+### การใช้งานประจำ
+1. Upload ข้อมูล 1
+2. Upload ข้อมูล 2
+3. กด "เริ่มอ่านและเปรียบเทียบ"
+4. ระบบตรวจ 3 ค่า
+5. ถ้าผ่านทั้ง 3 ค่า ปุ่ม "พิมพ์แบบฟอร์มข้อมูล 2" จะเปิดใช้งาน
+6. กด Print แล้วระบบพิมพ์ภาพของข้อมูล 2 ตัวจริง
 
-## Deploy
-อัปโหลด:
-- index.html
-- app.js
-- styles.css
-- vercel.json
-- README.md
-ขึ้น GitHub แล้ว Commit
-Vercel ใช้ Framework Preset = Other
+## ความแม่น
+- EAR ใช้ ROI + sharpen + multi-threshold + OCR voting จาก V15
+- Container ใช้ ISO 6346 validation
+- Seal ใช้ OCR consensus
+- Booking ใช้ reference-aware correction
+- File 2 PDF ใช้ native PDF text ก่อน OCR ถ้ามี
+
+## Print
+ปุ่ม Print แสดงตลอด แต่ disabled จนกว่าผลตรวจทั้ง 3 หัวข้อจะผ่าน
+เมื่อผ่าน ระบบจะพิมพ์ File 2 ที่อัปโหลด ไม่สร้างฟอร์มใหม่
+
+## หมายเหตุ
+Calibration เก็บใน localStorage ตาม domain
+ควรใช้งานผ่าน Production URL เดิมของ Vercel เพื่อไม่ต้องตั้งกรอบใหม่
