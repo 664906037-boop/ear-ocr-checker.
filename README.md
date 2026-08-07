@@ -1,13 +1,14 @@
-# EAR Vehicle Checker — Seal & Booking Refined V13
+# EAR Vehicle Checker — Booking Refined V14
 
-โฟกัสรอบนี้:
-- ไม่เปลี่ยน Container logic ที่เริ่มทำงานดีแล้ว
-- ปรับ SEAL NO และ BOOKING โดยเฉพาะ
-- เพิ่ม field-specific pattern scoring
-- เพิ่ม OCR confusion groups เช่น P/F, 3/8, 5/6, 0/O, 1/I/L/T
-- ใช้ weighted OCR distance แทน edit distance อย่างเดียว
-- ถ้าคู่ค่าต่างกันเฉพาะอักขระที่ OCR มักสับสน ระบบสามารถสร้าง consensus code
-- ถ้า consensus มีรูปแบบ Seal/Booking ที่ถูกต้อง จะแสดง "ตรงกันหลังแก้ OCR"
-- ถ้ายังไม่มั่นใจ จะแสดง "OCR ไม่ชัวร์" แทนการฟ้อง mismatch
+โฟกัสเฉพาะ BOOKING
+
+เพิ่ม:
+- Booking-specific prefix/digit zoning
+- แก้ OCR ใน prefix: 2->Z, 0->O, 1->I, 6->G ฯลฯ
+- แก้ OCR ใน numeric suffix: O->0, I/L->1, Z->2, G->6 ฯลฯ
+- รองรับรูปแบบที่พบจริง เช่น SGZG06748700, SGZG07601300, SGZG06692500, BSGZC26001315
+- ใช้ candidate จาก File 1 และ File 2 มาสร้าง booking consensus
+- ถ้า consensus มีรูปแบบสมเหตุสมผล จะแสดง “ตรงกันหลังแก้ OCR”
+- Container และ Seal logic จาก V13 คงเดิม
 
 ใช้ calibration boxes เดิมได้

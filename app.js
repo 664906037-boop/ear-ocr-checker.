@@ -264,34 +264,140 @@ function consensusCode(field,a,b){
   return out;
 }
 
+
+function bookingNormalizeCandidate(v){
+  let x=normalizeAlphaNumCode(v);
+
+  // Common booking samples observed:
+  // SGZG06748700 / SGZG07601300 / SGZG06692500 / BSGZC26001315
+  // Preserve a 4-5 letter prefix followed by digits.
+  // Correct likely OCR errors according to expected alpha/digit zones.
+  if(x.length < 10) return x;
+
+  // Try split points 4 and 5, prefer one that yields alpha prefix + numeric suffix.
+  const splits=[4,5];
+  let best=null;
+
+  for(const split of splits){
+    if(x.length<=split) continue;
+    let prefix=x.slice(0,split);
+    let suffix=x.slice(split);
+
+    prefix=prefix
+      .replace(/0/g,"O")
+      .replace(/1/g,"I")
+      .replace(/2/g,"Z")
+      .replace(/5/g,"S")
+      .replace(/6/g,"G")
+      .replace(/8/g,"B");
+
+    suffix=suffix
+      .replace(/O/g,"0")
+      .replace(/[IL]/g,"1")
+      .replace(/Z/g,"2")
+      .replace(/S/g,"5")
+      .replace(/B/g,"8")
+      .replace(/G/g,"6");
+
+    const candidate=prefix+suffix;
+    let score=0;
+    if(/^[A-Z]{4,5}\d{7,9}$/.test(candidate)) score+=100;
+    if(/^SGZG\d{7,9}$/.test(candidate)) score+=30;
+    if(/^BSGZC\d{7,9}$/.test(candidate)) score+=25;
+    if(candidate.length>=11&&candidate.length<=13) score+=10;
+
+    if(!best||score>best.score) best={candidate,score};
+  }
+
+  return best?.candidate || x;
+}
+
+function bookingConsensus(a,b){
+  const na=bookingNormalizeCandidate(a);
+  const nb=bookingNormalizeCandidate(b);
+
+  if(!na||!nb) return null;
+  if(na===nb) return na;
+  if(na.length!==nb.length) return null;
+
+  let out="";
+  let hard=0;
+
+  for(let i=0;i<na.length;i++){
+    const x=na[i],y=nb[i];
+    if(x===y){out+=x;continue;}
+
+    const alphaZone=i<4 || (i<5 && /[A-Z]/.test(x+y));
+    const group=CONFUSION_GROUPS.find(g=>g.includes(x)&&g.includes(y));
+
+    if(!group){hard++;out+=x;continue;}
+
+    if(alphaZone){
+      const alpha=[x,y].find(c=>/[A-Z]/.test(c));
+      out+=alpha || x;
+    }else{
+      const digit=[x,y].find(c=>/\d/.test(c));
+      out+=digit || x;
+    }
+  }
+
+  if(hard>1) return null;
+
+  const normalized=bookingNormalizeCandidate(out);
+  if(/^[A-Z]{4,5}\d{7,9}$/.test(normalized)) return normalized;
+  return null;
+}
+
+function bookingShapeBonus(v){
+  const x=bookingNormalizeCandidate(v);
+  let score=0;
+  if(/^[A-Z]{4,5}\d{7,9}$/.test(x))score+=120;
+  if(/^SGZG\d{7,9}$/.test(x))score+=50;
+  if(/^BSGZC\d{7,9}$/.test(x))score+=40;
+  return score;
+}
+
 function reconcile(field,aList,bList){
   let best=null;
 
   for(const a of aList.slice(0,25)){
     for(const b of bList.slice(0,25)){
-      const sim=similarity(a.value,b.value);
-      const exact=norm(a.value)===norm(b.value);
-      const dist=editDistance(a.value,b.value);
-      const weighted=weightedCodeDistance(a.value,b.value);
+      const av = field==="booking" ? bookingNormalizeCandidate(a.value) : a.value;
+      const bv = field==="booking" ? bookingNormalizeCandidate(b.value) : b.value;
+
+      const sim=similarity(av,bv);
+      const exact=norm(av)===norm(bv);
+      const dist=editDistance(av,bv);
+      const weighted=weightedCodeDistance(av,bv);
       const support=a.count+b.count;
       const confidence=(a.maxConf+b.maxConf)/2;
 
-      let score=(exact?1600:0)+sim*120+support*12+confidence/8;
-      score += fieldShapeScore(field,a.value)+fieldShapeScore(field,b.value);
+      let score=(exact?1700:0)+sim*130+support*12+confidence/8;
+      score += fieldShapeScore(field,av)+fieldShapeScore(field,bv);
 
       if(field==="containerNumber"){
-        if(isValidContainer(a.value))score+=300;
-        if(isValidContainer(b.value))score+=300;
-      } else {
-        const sa=codeStructure(field,a.value),sb=codeStructure(field,b.value);
+        if(isValidContainer(av))score+=300;
+        if(isValidContainer(bv))score+=300;
+      }else{
+        const sa=codeStructure(field,av),sb=codeStructure(field,bv);
         if(sa&&sb){
           if(sa.prefix===sb.prefix)score+=90;
           if(sa.digits.length===sb.digits.length)score+=30;
         }
         score += Math.max(0,60-weighted*20);
+
+        if(field==="booking"){
+          score += bookingShapeBonus(av)+bookingShapeBonus(bv);
+        }
       }
 
-      if(!best||score>best.score)best={a,b,sim,exact,dist,weighted,support,confidence,score};
+      if(!best||score>best.score){
+        best={
+          a:{...a,value:av},
+          b:{...b,value:bv},
+          sim,exact,dist,weighted,support,confidence,score
+        };
+      }
     }
   }
 
@@ -304,7 +410,15 @@ function reconcile(field,aList,bList){
 
   best.canonical=stronger.value;
 
-  if(field!=="containerNumber"){
+  if(field==="booking"){
+    const consensus=bookingConsensus(best.a.value,best.b.value);
+    if(consensus){
+      best.consensus=consensus;
+      if(norm(consensus)===norm(best.a.value)||norm(consensus)===norm(best.b.value)){
+        best.exact = norm(best.a.value)===norm(best.b.value);
+      }
+    }
+  }else if(field!=="containerNumber"){
     const consensus=consensusCode(field,best.a.value,best.b.value);
     if(consensus && fieldShapeScore(field,consensus)>=60){
       best.consensus=consensus;
@@ -345,8 +459,12 @@ function verdict(field,p){
   }
 
   if(field==="booking"){
-    if(p.weighted<=1.6 || p.sim>=0.80 || p.confidence<58)
+    if(p.consensus && /^[A-Z]{4,5}\d{7,9}$/.test(p.consensus))
+      return{status:"corrected",text:"ตรงกันหลังแก้ OCR"};
+
+    if(p.weighted<=2.2 || p.sim>=0.76 || p.confidence<60)
       return{status:"uncertain",text:"OCR ไม่ชัวร์"};
+
     return{status:"fail",text:"ไม่ตรงกัน"};
   }
 
