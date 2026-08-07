@@ -1,47 +1,20 @@
-# EAR Vehicle Checker — Precision Learned Scan V21
+# EAR Vehicle Checker — Conservative Scan V22
 
-เป้าหมาย: เพิ่มความแม่นยำจาก V20 โดยยังรักษาความเร็ว
+V22 แก้ regression จาก V21 โดยกลับมาใช้แนวทางของ V20 ที่เร็วและเสถียร แล้วเพิ่มความแม่นแบบ conservative
 
-## ระบบจำ 2 อย่าง
-1. ตำแหน่งโดยประมาณของ Container / Seal / Booking
-2. รูปแบบข้อมูลที่ถูกต้องของแต่ละ field
+## หลักสำคัญ
 
-## Pipeline
-
-Stage 1 — Fast Scan
-อ่านตำแหน่งที่จำไว้เพียง 3 pass
-ถ้าค่าผ่าน pattern + confidence -> ใช้ทันที
-
-Stage 2 — Nearby Search
-ถ้าค่ายังไม่แข็งแรง -> ค้นซ้าย ขวา บน ล่าง
-
-Stage 3 — Precision Scan
-เฉพาะ field ที่ยังไม่แน่ใจ:
-- 11 ตำแหน่งย่อยรอบ ROI
-- sharpen / contrast
-- threshold 155 / 170 / 185 / 200
-- OCR แบบ single-line
-- รวม candidate และโหวต
+1. อ่านตำแหน่งเดิมก่อน
+2. ถ้าค่ามีรูปแบบถูกต้อง + confidence พอ -> LOCK ผลทันที
+3. ไม่ให้ OCR จากตำแหน่งรอบข้างมาแทนค่าที่ดีอยู่แล้ว
+4. สแกนซ้าย/ขวา/บน/ล่าง/ขยาย เฉพาะ field ที่อ่านไม่มั่นใจ
+5. Candidate จากตำแหน่งเดิมได้คะแนนสูงกว่า fallback
+6. ถ้าสองฝั่งอ่านได้แข็งแรงทั้งคู่แต่ค่าต่างกัน ระบบจะไม่ auto-correct ให้เหมือนกัน
 
 ## Validation
+- Container: ISO 6346
+- Seal: THxx + digits / 4 letters + digits
+- Booking: SGZG... / BSGZC... / 4-5 letters + digits
 
-Container:
-- 4 letters + 7 digits
-- ISO 6346 check digit
-
-Seal:
-- ให้คะแนนสูงกับ pattern เช่น THBP49647
-- prefix ตัวอักษร + ตัวเลข
-
-Booking:
-- 4-5 letters + 7-9 digits
-- ให้คะแนนสูงกับ pattern เช่น SGZG06748700 / BSGZC26001315
-- reference-aware correction
-
-## Reference
-File 2 ที่อ่านได้ชัดกว่าจะถูกใช้ช่วย re-rank candidate ของ EAR
-แต่ระบบจะไม่บังคับค่าให้ตรงหาก evidence ไม่เพียงพอ
-
-## Print
-คง workflow จาก Production V18:
-เมื่อทั้ง 3 ค่า PASS ปุ่มพิมพ์ข้อมูล 2 จะใช้งานได้
+## Workflow
+Calibration ครั้งแรก -> ใช้งานประจำ Upload 2 files -> Compare -> Print เมื่อผ่าน

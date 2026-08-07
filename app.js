@@ -455,177 +455,66 @@ async function readCenterFast(worker,side,field){
 }
 
 
-function precisionBoxes(side,field){
-  const base=boxes[side]?.[field];
-  if(!base)return [];
-
-  // Finer search grid than V20. Small shifts are designed for photographed
-  // documents where the same field drifts slightly between images.
-  const sx=Math.max(0.003,base.w*0.08);
-  const sy=Math.max(0.003,base.h*0.22);
-
-  const offsets=[
-    [0,0],
-    [-sx,0],[sx,0],
-    [0,-sy],[0,sy],
-    [-sx,-sy],[sx,-sy],
-    [-sx,sy],[sx,sy],
-    [-sx*2,0],[sx*2,0]
-  ];
-
-  return offsets.map(([dx,dy],i)=>({
-    name:`precision-${i}`,
-    x:Math.max(0,base.x+dx),
-    y:Math.max(0,base.y+dy),
-    w:Math.min(base.w,1-Math.max(0,base.x+dx)),
-    h:Math.min(base.h,1-Math.max(0,base.y+dy)),
-    penalty:i===0?0:Math.min(12,i)
-  })).filter(v=>v.w>0.01&&v.h>0.01);
-}
-
-function strictFieldScore(field,value){
-  const v=clean(value);
-  let score=learnedPatternScore(field,v);
+function conservativeStrong(field,item){
+  if(!item)return false;
+  const v=field==="booking"?bookingNormalizeCandidate(item.value):clean(item.value);
 
   if(field==="containerNumber"){
-    if(isValidContainer(v))score+=300;
-    if(/^[A-Z]{4}\d{7}$/.test(v))score+=100;
+    return isValidContainer(v) && item.maxConf>=38;
   }
 
   if(field==="sealNo"){
-    if(/^TH[A-Z]{2}\d{5,9}$/.test(v))score+=160;
-    else if(/^[A-Z]{4}\d{5,9}$/.test(v))score+=110;
+    return (
+      (/^TH[A-Z]{2}\d{5,9}$/.test(v) || /^[A-Z]{4}\d{5,9}$/.test(v))
+      && item.maxConf>=44
+    );
   }
 
   if(field==="booking"){
-    const b=bookingNormalizeCandidate(v);
-    if(/^SGZG\d{7,9}$/.test(b))score+=180;
-    else if(/^BSGZC\d{7,9}$/.test(b))score+=160;
-    else if(/^[A-Z]{4,5}\d{7,9}$/.test(b))score+=100;
+    return (
+      (/^SGZG\d{7,9}$/.test(v) || /^BSGZC\d{7,9}$/.test(v) || /^[A-Z]{4,5}\d{7,9}$/.test(v))
+      && item.maxConf>=44
+    );
+  }
+
+  return false;
+}
+
+function conservativeFieldScore(field,item){
+  if(!item)return -9999;
+  const v=field==="booking"?bookingNormalizeCandidate(item.value):clean(item.value);
+  let score=item.count*15+item.maxConf/2+(item.positionScore||0);
+
+  if(field==="containerNumber"){
+    if(isValidContainer(v))score+=400;
+    else if(/^[A-Z]{4}\d{7}$/.test(v))score+=40;
+  }
+
+  if(field==="sealNo"){
+    if(/^TH[A-Z]{2}\d{5,9}$/.test(v))score+=220;
+    else if(/^[A-Z]{4}\d{5,9}$/.test(v))score+=150;
+  }
+
+  if(field==="booking"){
+    if(/^SGZG\d{7,9}$/.test(v))score+=260;
+    else if(/^BSGZC\d{7,9}$/.test(v))score+=230;
+    else if(/^[A-Z]{4,5}\d{7,9}$/.test(v))score+=150;
   }
 
   return score;
 }
 
-function highConfidenceCandidate(field,item){
-  if(!item)return false;
-  const s=strictFieldScore(field,item.value);
+async function readConservativeFallback(worker,side,field){
+  const variants=smartBoxes(side,field)
+    .filter(v=>["left","right","up","down","expand"].includes(v.name));
 
-  if(field==="containerNumber")
-    return isValidContainer(item.value) && item.maxConf>=45 && item.count>=1;
-
-  if(field==="sealNo")
-    return s>=180 && item.maxConf>=50;
-
-  if(field==="booking")
-    return s>=190 && item.maxConf>=50;
-
-  return false;
-}
-
-async function readPrecisionCandidates(worker,side,field){
-  const variants=precisionBoxes(side,field);
   const merged=new Map();
-
-  // High-accuracy passes. Only used for difficult fields, not every field.
-  const passes=[
-    ["sharp",7,190],
-    ["contrast",7,190],
-    ["threshold",7,155],
-    ["threshold",7,170],
-    ["threshold",7,185],
-    ["threshold",7,200],
-    ["contrast",8,190]
-  ];
 
   for(const variant of variants){
-    const c=cropByBox(side,variant,11);
+    const c=cropByBox(side,variant,8);
+    const ranked=await readCropCandidatesLite(worker,field,c);
 
-    for(const [mode,psm,t] of passes){
-      await worker.setParameters({
-        tessedit_pageseg_mode:String(psm),
-        preserve_interword_spaces:"1",
-        user_defined_dpi:"300",
-        tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/"
-      });
-
-      const r=await worker.recognize(prep(c,mode,t));
-      const conf=Number(r.data.confidence||0);
-      const text=r.data.text||"";
-
-      for(let value of parseCandidates(field,text)){
-        if(field==="booking")value=bookingNormalizeCandidate(value);
-
-        const old=merged.get(value)||{
-          value,count:0,conf:0,maxConf:0,
-          positionScore:0,sources:[]
-        };
-
-        old.count++;
-        old.conf+=conf;
-        old.maxConf=Math.max(old.maxConf,conf);
-        old.positionScore+=Math.max(1,16-variant.penalty);
-        old.sources.push(variant.name);
-        merged.set(value,old);
-      }
-    }
-  }
-
-  return [...merged.values()].sort((a,b)=>{
-    const as=strictFieldScore(field,a.value)+a.positionScore+a.count*18+a.maxConf/2;
-    const bs=strictFieldScore(field,b.value)+b.positionScore+b.count*18+b.maxConf/2;
-    return bs-as;
-  });
-}
-
-function referenceAwareRerank(field,candidates,reference){
-  if(!reference || !candidates?.length)return candidates||[];
-
-  const ref=field==="booking"?bookingNormalizeCandidate(reference):clean(reference);
-
-  return [...candidates].sort((a,b)=>{
-    const av=field==="booking"?bookingNormalizeCandidate(a.value):clean(a.value);
-    const bv=field==="booking"?bookingNormalizeCandidate(b.value):clean(b.value);
-
-    const as=
-      strictFieldScore(field,av)
-      +similarity(av,ref)*260
-      +(norm(av)===norm(ref)?1000:0)
-      +a.count*15+a.maxConf/2;
-
-    const bs=
-      strictFieldScore(field,bv)
-      +similarity(bv,ref)*260
-      +(norm(bv)===norm(ref)?1000:0)
-      +b.count*15+b.maxConf/2;
-
-    return bs-as;
-  });
-}
-
-async function readSmartCandidates(worker,side,field){
-  // Stage 1 — Fast learned center scan from V20.
-  let ranked=await readCenterFast(worker,side,field);
-
-  if(highConfidenceCandidate(field,ranked[0])){
-    return ranked;
-  }
-
-  // Stage 2 — Small nearby offsets.
-  const variants=smartBoxes(side,field);
-  const merged=new Map();
-
-  for(const item of ranked){
-    merged.set(item.value,{...item});
-  }
-
-  const near=variants.filter(v=>["left","right","up","down"].includes(v.name));
-
-  for(const variant of near){
-    const c=cropByBox(side,variant,9);
-    const sub=await readCropCandidatesLite(worker,field,c);
-
-    for(let item of sub){
+    for(let item of ranked){
       let value=item.value;
       if(field==="booking")value=bookingNormalizeCandidate(value);
 
@@ -636,43 +525,58 @@ async function readSmartCandidates(worker,side,field){
       old.count+=item.count;
       old.conf+=item.conf;
       old.maxConf=Math.max(old.maxConf,item.maxConf);
-      old.positionScore+=8;
+      old.positionScore+=variant.name==="expand"?4:7;
       old.sources.push(variant.name);
       merged.set(value,old);
     }
   }
 
-  ranked=[...merged.values()].sort((a,b)=>{
-    const as=strictFieldScore(field,a.value)+a.positionScore+a.count*15+a.maxConf/2;
-    const bs=strictFieldScore(field,b.value)+b.positionScore+b.count*15+b.maxConf/2;
-    return bs-as;
-  });
+  return [...merged.values()].sort((a,b)=>
+    conservativeFieldScore(field,b)-conservativeFieldScore(field,a)
+  );
+}
 
-  if(highConfidenceCandidate(field,ranked[0])){
-    return ranked;
+async function readSmartCandidates(worker,side,field){
+  // Stage 1: read only the remembered center first.
+  const center=await readCenterFast(worker,side,field);
+
+  // Important: if the center result already has the expected shape,
+  // lock it. Nearby OCR must not replace a good center result.
+  if(conservativeStrong(field,center[0])){
+    return center;
   }
 
-  // Stage 3 — Precision scan only for the field that is still uncertain.
-  const precision=await readPrecisionCandidates(worker,side,field);
+  // Stage 2: only uncertain fields get a small local search.
+  const fallback=await readConservativeFallback(worker,side,field);
 
-  for(const item of precision){
-    const old=merged.get(item.value)||{
-      value:item.value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
+  const merged=new Map();
+
+  for(const item of center){
+    const value=field==="booking"?bookingNormalizeCandidate(item.value):item.value;
+    merged.set(value,{
+      ...item,
+      value,
+      positionScore:(item.positionScore||0)+35,
+      sources:[...(item.sources||[]),"center-locked-weight"]
+    });
+  }
+
+  for(const item of fallback){
+    const value=field==="booking"?bookingNormalizeCandidate(item.value):item.value;
+    const old=merged.get(value)||{
+      value,count:0,conf:0,maxConf:0,positionScore:0,sources:[]
     };
-
     old.count+=item.count;
     old.conf+=item.conf;
     old.maxConf=Math.max(old.maxConf,item.maxConf);
     old.positionScore+=item.positionScore||0;
     old.sources.push(...(item.sources||[]));
-    merged.set(item.value,old);
+    merged.set(value,old);
   }
 
-  return [...merged.values()].sort((a,b)=>{
-    const as=strictFieldScore(field,a.value)+a.positionScore+a.count*18+a.maxConf/2;
-    const bs=strictFieldScore(field,b.value)+b.positionScore+b.count*18+b.maxConf/2;
-    return bs-as;
-  });
+  return [...merged.values()].sort((a,b)=>
+    conservativeFieldScore(field,b)-conservativeFieldScore(field,a)
+  );
 }
 
 function sharpenCanvas(src){
@@ -1016,6 +920,16 @@ function reconcile(field,aList,bList){
   return best;
 }
 
+
+function bothSidesStrongButDifferent(field,p){
+  if(!p || p.exact)return false;
+
+  const a={value:p.a.value,maxConf:p.a.maxConf||0,count:p.a.count||1};
+  const b={value:p.b.value,maxConf:p.b.maxConf||0,count:p.b.count||1};
+
+  return conservativeStrong(field,a) && conservativeStrong(field,b);
+}
+
 function verdict(field,p){
   if(!p)return{status:"missing",text:"OCR อ่านไม่ครบ"};
 
@@ -1041,12 +955,22 @@ function verdict(field,p){
   }
 
   if(field==="sealNo"){
+    if(bothSidesStrongButDifferent(field,p))
+      return{status:"fail",text:"ไม่ตรงกัน"};
+
+    if(p.consensus)
+      return{status:"corrected",text:"ตรงกันหลังแก้ OCR"};
+
     if(p.weighted<=1.1 || p.sim>=0.86 || p.confidence<52)
       return{status:"uncertain",text:"OCR ไม่ชัวร์"};
+
     return{status:"fail",text:"ไม่ตรงกัน"};
   }
 
   if(field==="booking"){
+    if(bothSidesStrongButDifferent(field,p))
+      return{status:"fail",text:"ไม่ตรงกัน"};
+
     if(p.referenceResolved && p.consensus && bookingReferenceShape(p.consensus))
       return{status:"corrected",text:"ตรงกันหลังแก้ OCR"};
 
@@ -1123,7 +1047,7 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
     const worker=await Tesseract.createWorker("eng",1,{
       logger:m=>{
         if(m.status==="recognizing text"){
-          setProgress(10+(m.progress||0)*80,"กำลังตรวจตำแหน่งและรูปแบบข้อมูล...")
+          setProgress(10+(m.progress||0)*80,"กำลังอ่านตำแหน่งที่จดจำ...")
         }
       }
     });
@@ -1150,12 +1074,6 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
     }
 
     await worker.terminate();
-
-    // Re-rank EAR candidates against the strongest File 2 reference.
-    for(const f of fields){
-      const ref=candidateData[1][f]?.[0]?.value||"";
-      candidateData[0][f]=referenceAwareRerank(f,candidateData[0][f],ref);
-    }
 
     const resolved={};
     for(const f of fields){
