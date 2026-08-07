@@ -1,52 +1,47 @@
-# EAR Vehicle Checker — Fast Learned Scan V20
+# EAR Vehicle Checker — Precision Learned Scan V21
 
-V20 เน้นสองเรื่องพร้อมกัน:
-1. อ่านเร็วขึ้น
-2. จำทั้งตำแหน่งและรูปแบบของข้อมูล
+เป้าหมาย: เพิ่มความแม่นยำจาก V20 โดยยังรักษาความเร็ว
 
-## สิ่งที่ระบบจำ
+## ระบบจำ 2 อย่าง
+1. ตำแหน่งโดยประมาณของ Container / Seal / Booking
+2. รูปแบบข้อมูลที่ถูกต้องของแต่ละ field
 
-### CONTAINER NUMBER
-- ตำแหน่งโดยประมาณจาก Calibration
-- รูปแบบ 4 ตัวอักษร + 7 ตัวเลข
-- ตรวจ ISO 6346 check digit
+## Pipeline
 
-### SEAL NO
-- ตำแหน่งโดยประมาณ
-- รูปแบบ prefix ตัวอักษร + เลข
-- pattern ที่พบจริง เช่น THBP49717
+Stage 1 — Fast Scan
+อ่านตำแหน่งที่จำไว้เพียง 3 pass
+ถ้าค่าผ่าน pattern + confidence -> ใช้ทันที
 
-### BOOKING
-- ตำแหน่งโดยประมาณ
-- รูปแบบ 4-5 ตัวอักษร + 7-9 ตัวเลข
-- pattern ที่พบจริง เช่น SGZG06748700 / BSGZC26001315
+Stage 2 — Nearby Search
+ถ้าค่ายังไม่แข็งแรง -> ค้นซ้าย ขวา บน ล่าง
 
-## Fast Scan Pipeline
+Stage 3 — Precision Scan
+เฉพาะ field ที่ยังไม่แน่ใจ:
+- 11 ตำแหน่งย่อยรอบ ROI
+- sharpen / contrast
+- threshold 155 / 170 / 185 / 200
+- OCR แบบ single-line
+- รวม candidate และโหวต
 
-Stage 1:
-อ่านเฉพาะตำแหน่งที่จำไว้ 3 pass:
-- sharpen
-- contrast
-- threshold
+## Validation
 
-ถ้าค่าที่อ่านได้ตรง pattern -> จบทันที
+Container:
+- 4 letters + 7 digits
+- ISO 6346 check digit
 
-Stage 2:
-ถ้ายังไม่มั่นใจ ค้นหาเฉพาะ:
-- ซ้าย
-- ขวา
-- บน
-- ล่าง
+Seal:
+- ให้คะแนนสูงกับ pattern เช่น THBP49647
+- prefix ตัวอักษร + ตัวเลข
 
-Stage 3:
-เฉพาะภาพยากจริง ๆ จึงค้นหา:
-- expanded ROI
-- wide left
-- wide right
+Booking:
+- 4-5 letters + 7-9 digits
+- ให้คะแนนสูงกับ pattern เช่น SGZG06748700 / BSGZC26001315
+- reference-aware correction
 
-ดังนั้นภาพปกติควรเร็วกว่า V19 มาก เพราะไม่ต้อง OCR หลายตำแหน่งทุกครั้ง
+## Reference
+File 2 ที่อ่านได้ชัดกว่าจะถูกใช้ช่วย re-rank candidate ของ EAR
+แต่ระบบจะไม่บังคับค่าให้ตรงหาก evidence ไม่เพียงพอ
 
-## Workflow
-Calibration ครั้งแรกเหมือนเดิม
-หลังจากนั้น:
-Upload 2 files -> Check -> Compare -> Print เมื่อผ่าน
+## Print
+คง workflow จาก Production V18:
+เมื่อทั้ง 3 ค่า PASS ปุ่มพิมพ์ข้อมูล 2 จะใช้งานได้
