@@ -32,16 +32,54 @@ function containerCorrectionCandidates(code){
   return[...results].filter(isValidContainer)
 }
 
+function normalizeAlphaNumCode(v){
+  return clean(v)
+    .replace(/[^A-Z0-9]/g,"");
+}
+
+function fieldShapeScore(field,v){
+  const x=normalizeAlphaNumCode(v);
+  let score=0;
+
+  if(field==="sealNo"){
+    // Typical samples: THBP49717, THSG22500949
+    if(/^[A-Z]{4}\d{5,9}$/.test(x))score+=70;
+    if(/^TH[A-Z]{2}\d{5,9}$/.test(x))score+=18;
+    if(x.length>=9&&x.length<=12)score+=12;
+  }
+
+  if(field==="booking"){
+    // Typical samples: SGZG06748700, BSGZC26001315
+    if(/^[A-Z]{4,5}\d{7,9}$/.test(x))score+=75;
+    if(/^[A-Z]{4}\d{8}$/.test(x))score+=18;
+    if(x.length>=11&&x.length<=13)score+=12;
+  }
+
+  return score;
+}
+
 function parseCandidates(field,text){
   const raw=String(text||"").toUpperCase();
+
   if(field==="containerNumber"){
     const all=new Set();
-    for(const base of baseContainerCandidates(raw)){all.add(base);for(const corrected of containerCorrectionCandidates(base))all.add(corrected)}
-    return[...all]
+    for(const base of baseContainerCandidates(raw)){
+      all.add(base);
+      for(const corrected of containerCorrectionCandidates(base))all.add(corrected);
+    }
+    return[...all];
   }
-  const tokens=(raw.match(/[A-Z0-9][A-Z0-9\-_/]{4,22}/g)||[]).map(clean).filter(x=>/[A-Z]/.test(x)&&/\d/.test(x));
-  if(field==="sealNo")return[...new Set(tokens.filter(x=>x.length>=7&&x.length<=14))];
-  return[...new Set(tokens.filter(x=>x.length>=8&&x.length<=18))]
+
+  const tokens=(raw.match(/[A-Z0-9][A-Z0-9\-_/]{4,22}/g)||[])
+    .map(normalizeAlphaNumCode)
+    .filter(x=>/[A-Z]/.test(x)&&/\d/.test(x));
+
+  const valid=tokens.filter(x=>{
+    if(field==="sealNo")return x.length>=7&&x.length<=14;
+    return x.length>=8&&x.length<=18;
+  });
+
+  return[...new Set(valid)];
 }
 
 function editDistance(a,b){
@@ -146,49 +184,173 @@ async function readCropCandidates(worker,field,c){
   return ranked
 }
 
+
+const CONFUSION_GROUPS = [
+  ["0","O","Q","D"],
+  ["1","I","L","T"],
+  ["2","Z"],
+  ["3","8"],
+  ["4","A"],
+  ["5","S","6"],
+  ["6","G","5","8"],
+  ["7","T","1"],
+  ["8","B","3","6"],
+  ["9","G","4"],
+  ["P","F","R"],
+  ["C","G"],
+  ["V","Y"],
+  ["M","N"]
+];
+
+function charsConfusable(a,b){
+  if(a===b)return true;
+  return CONFUSION_GROUPS.some(g=>g.includes(a)&&g.includes(b));
+}
+
+function weightedCodeDistance(a,b){
+  a=norm(a);b=norm(b);
+  const len=Math.max(a.length,b.length);
+  let cost=0;
+  for(let i=0;i<len;i++){
+    const x=a[i]||"",y=b[i]||"";
+    if(x===y)continue;
+    if(x&&y&&charsConfusable(x,y))cost+=0.35;
+    else cost+=1;
+  }
+  return cost;
+}
+
+function codeStructure(field,v){
+  const x=normalizeAlphaNumCode(v);
+  if(field==="sealNo"){
+    const m=x.match(/^([A-Z]{2,5})(\\d{4,10})$/);
+    return m?{prefix:m[1],digits:m[2]}:null;
+  }
+  if(field==="booking"){
+    const m=x.match(/^([A-Z]{3,6})(\\d{6,10})$/);
+    return m?{prefix:m[1],digits:m[2]}:null;
+  }
+  return null;
+}
+
+function consensusCode(field,a,b){
+  const na=norm(a),nb=norm(b);
+  if(!na||!nb||na.length!==nb.length)return null;
+
+  let out="";
+  let ambiguous=0;
+
+  for(let i=0;i<na.length;i++){
+    const x=na[i],y=nb[i];
+    if(x===y){out+=x;continue;}
+
+    if(!charsConfusable(x,y))return null;
+
+    // Prefer a character that preserves expected alpha/digit structure.
+    const alphaZone = field==="sealNo" ? i<4 : field==="booking" ? i<5 : false;
+
+    if(alphaZone){
+      if(/[A-Z]/.test(x)&&!/[A-Z]/.test(y))out+=x;
+      else if(/[A-Z]/.test(y)&&!/[A-Z]/.test(x))out+=y;
+      else { out+=x; ambiguous++; }
+    }else{
+      if(/\\d/.test(x)&&! /\\d/.test(y))out+=x;
+      else if(/\\d/.test(y)&&! /\\d/.test(x))out+=y;
+      else { out+=x; ambiguous++; }
+    }
+  }
+
+  if(ambiguous>1)return null;
+  return out;
+}
+
 function reconcile(field,aList,bList){
   let best=null;
-  for(const a of aList.slice(0,20))for(const b of bList.slice(0,20)){
-    const sim=similarity(a.value,b.value),exact=norm(a.value)===norm(b.value),dist=editDistance(a.value,b.value),support=a.count+b.count,confidence=(a.maxConf+b.maxConf)/2;
-    let score=(exact?1500:0)+sim*120+support*12+confidence/8;
-    if(field==="containerNumber"){if(isValidContainer(a.value))score+=300;if(isValidContainer(b.value))score+=300}
-    if(!best||score>best.score)best={a,b,sim,exact,dist,support,confidence,score}
+
+  for(const a of aList.slice(0,25)){
+    for(const b of bList.slice(0,25)){
+      const sim=similarity(a.value,b.value);
+      const exact=norm(a.value)===norm(b.value);
+      const dist=editDistance(a.value,b.value);
+      const weighted=weightedCodeDistance(a.value,b.value);
+      const support=a.count+b.count;
+      const confidence=(a.maxConf+b.maxConf)/2;
+
+      let score=(exact?1600:0)+sim*120+support*12+confidence/8;
+      score += fieldShapeScore(field,a.value)+fieldShapeScore(field,b.value);
+
+      if(field==="containerNumber"){
+        if(isValidContainer(a.value))score+=300;
+        if(isValidContainer(b.value))score+=300;
+      } else {
+        const sa=codeStructure(field,a.value),sb=codeStructure(field,b.value);
+        if(sa&&sb){
+          if(sa.prefix===sb.prefix)score+=90;
+          if(sa.digits.length===sb.digits.length)score+=30;
+        }
+        score += Math.max(0,60-weighted*20);
+      }
+
+      if(!best||score>best.score)best={a,b,sim,exact,dist,weighted,support,confidence,score};
+    }
   }
+
   if(!best)return null;
 
-  // If both OCRs are very close and one side has a much stronger candidate,
-  // prefer the stronger reading as canonical rather than immediately declaring mismatch.
-  const stronger=best.a.count>best.b.count?best.a:best.b.count>best.a.count?best.b:(best.a.maxConf>=best.b.maxConf?best.a:best.b);
-  return {...best,canonical:stronger.value}
+  const stronger=
+    best.a.count>best.b.count?best.a:
+    best.b.count>best.a.count?best.b:
+    (best.a.maxConf>=best.b.maxConf?best.a:best.b);
+
+  best.canonical=stronger.value;
+
+  if(field!=="containerNumber"){
+    const consensus=consensusCode(field,best.a.value,best.b.value);
+    if(consensus && fieldShapeScore(field,consensus)>=60){
+      best.consensus=consensus;
+    }
+  }
+
+  return best;
 }
 
 function verdict(field,p){
   if(!p)return{status:"missing",text:"OCR อ่านไม่ครบ"};
 
   if(p.exact){
-    if(field==="containerNumber"&&!isValidContainer(p.a.value))return{status:"uncertain",text:"OCR ตรงกัน แต่ Container ไม่ผ่าน ISO"};
-    if(p.confidence<35)return{status:"uncertain",text:"OCR ตรงกัน แต่ความมั่นใจต่ำ"};
-    return{status:"pass",text:"ตรงกัน"}
+    if(field==="containerNumber"&&!isValidContainer(p.a.value))
+      return{status:"uncertain",text:"OCR ตรงกัน แต่ Container ไม่ผ่าน ISO"};
+    if(p.confidence<35)
+      return{status:"uncertain",text:"OCR ตรงกัน แต่ความมั่นใจต่ำ"};
+    return{status:"pass",text:"ตรงกัน"};
   }
 
   if(field==="containerNumber"){
     const av=isValidContainer(p.a.value),bv=isValidContainer(p.b.value);
     if(av&&bv&&p.dist>=3)return{status:"fail",text:"ไม่ตรงกัน"};
     if(!av||!bv)return{status:"uncertain",text:"OCR ไม่ชัวร์ — Container ไม่ผ่าน ISO"};
-    return p.dist<=2?{status:"uncertain",text:"OCR ไม่ชัวร์"}:{status:"fail",text:"ไม่ตรงกัน"}
+    return p.dist<=2?{status:"uncertain",text:"OCR ไม่ชัวร์"}:{status:"fail",text:"ไม่ตรงกัน"};
+  }
+
+  // Seal and Booking: if discrepancies are explainable by common OCR confusions,
+  // do not incorrectly declare a real document mismatch.
+  if(p.consensus){
+    return{status:"corrected",text:"ตรงกันหลังแก้ OCR"};
   }
 
   if(field==="sealNo"){
-    if(p.dist<=1||p.sim>=0.88||p.confidence<50)return{status:"uncertain",text:"OCR ไม่ชัวร์"};
-    return{status:"fail",text:"ไม่ตรงกัน"}
+    if(p.weighted<=1.1 || p.sim>=0.86 || p.confidence<52)
+      return{status:"uncertain",text:"OCR ไม่ชัวร์"};
+    return{status:"fail",text:"ไม่ตรงกัน"};
   }
 
   if(field==="booking"){
-    if(p.dist<=2||p.sim>=0.82||p.confidence<55)return{status:"uncertain",text:"OCR ไม่ชัวร์"};
-    return{status:"fail",text:"ไม่ตรงกัน"}
+    if(p.weighted<=1.6 || p.sim>=0.80 || p.confidence<58)
+      return{status:"uncertain",text:"OCR ไม่ชัวร์"};
+    return{status:"fail",text:"ไม่ตรงกัน"};
   }
 
-  return{status:"fail",text:"ไม่ตรงกัน"}
+  return{status:"fail",text:"ไม่ตรงกัน"};
 }
 
 function setProgress(p,t){document.querySelector("#progressWrap").classList.remove("hidden");document.querySelector("#bar").style.width=`${p}%`;document.querySelector("#progressPct").textContent=`${Math.round(p)}%`;document.querySelector("#progressText").textContent=t}
@@ -211,27 +373,62 @@ document.querySelector("#checkBtn").addEventListener("click",async()=>{
 });
 
 function renderResolved(resolved){
-  const tbody=document.querySelector("#tbody");tbody.innerHTML="";
-  const mismatches=[],uncertain=[],missing=[];
+  const tbody=document.querySelector("#tbody");
+  tbody.innerHTML="";
+  const mismatches=[],uncertain=[],missing=[],corrected=[];
 
   for(const f of fields){
-    const r=resolved[f],p=r.pair,a=p?.a?.value||"",b=p?.b?.value||"";
-    let cls="missing";if(r.verdict.status==="pass")cls="pass";if(r.verdict.status==="fail")cls="fail";
+    const r=resolved[f],p=r.pair;
+    let a=p?.a?.value||"",b=p?.b?.value||"";
+
+    let cls="missing";
+    if(r.verdict.status==="pass"||r.verdict.status==="corrected")cls="pass";
+    if(r.verdict.status==="fail")cls="fail";
+
     if(r.verdict.status==="fail")mismatches.push(labels[f]);
     if(r.verdict.status==="uncertain")uncertain.push(labels[f]);
     if(r.verdict.status==="missing")missing.push(labels[f]);
+    if(r.verdict.status==="corrected")corrected.push(labels[f]);
 
-    const note=r.verdict.status==="uncertain"&&p?.canonical?`<div style="font-size:11px;color:#667085;margin-top:4px">ค่าที่น่าเชื่อถือกว่า: ${p.canonical}</div>`:"";
+    let note="";
+    if(r.verdict.status==="corrected"&&p?.consensus){
+      note=`<div style="font-size:11px;color:#067647;margin-top:4px">ค่าที่ระบบแก้ OCR: ${p.consensus}</div>`;
+      a=p.consensus;b=p.consensus;
+    }else if(r.verdict.status==="uncertain"&&p?.canonical){
+      note=`<div style="font-size:11px;color:#667085;margin-top:4px">ค่าที่น่าเชื่อถือกว่า: ${p.canonical}</div>`;
+    }
+
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${labels[f]}</td><td><input value="${a}" readonly></td><td><input value="${b}" readonly></td><td><span class="status ${cls}">${r.verdict.text}</span>${note}</td>`;
-    tbody.append(tr)
+    tr.innerHTML=`<td>${labels[f]}</td>
+      <td><input value="${a}" readonly></td>
+      <td><input value="${b}" readonly></td>
+      <td><span class="status ${cls}">${r.verdict.text}</span>${note}</td>`;
+    tbody.append(tr);
   }
 
   const overall=document.querySelector("#overall"),sum=document.querySelector("#mismatchSummary");
-  if(!mismatches.length&&!uncertain.length&&!missing.length){overall.className="overall pass";overall.textContent="ผ่านการตรวจสอบ";sum.textContent="ทั้ง 3 หัวข้อตรงกัน"}
-  else if(mismatches.length){overall.className="overall fail";overall.textContent="ไม่ผ่านการตรวจสอบ";sum.textContent=`หัวข้อที่ยืนยันว่าไม่ตรง: ${mismatches.join(", ")}${uncertain.length?` | OCR ไม่ชัวร์: ${uncertain.join(", ")}`:""}`}
-  else{overall.className="overall fail";overall.textContent="ยังยืนยันผลไม่ได้";const parts=[];if(uncertain.length)parts.push(`OCR ไม่ชัวร์: ${uncertain.join(", ")}`);if(missing.length)parts.push(`อ่านไม่ครบ: ${missing.join(", ")}`);sum.textContent=parts.join(" | ")}
-  document.querySelector("#results").classList.remove("hidden")
+
+  if(!mismatches.length&&!uncertain.length&&!missing.length){
+    overall.className="overall pass";
+    overall.textContent="ผ่านการตรวจสอบ";
+    sum.textContent=corrected.length
+      ? `ทั้ง 3 หัวข้อตรงกัน (แก้ OCR อัตโนมัติ: ${corrected.join(", ")})`
+      : "ทั้ง 3 หัวข้อตรงกัน";
+  }else if(mismatches.length){
+    overall.className="overall fail";
+    overall.textContent="ไม่ผ่านการตรวจสอบ";
+    sum.textContent=`หัวข้อที่ยืนยันว่าไม่ตรง: ${mismatches.join(", ")}${uncertain.length?` | OCR ไม่ชัวร์: ${uncertain.join(", ")}`:""}`;
+  }else{
+    overall.className="overall fail";
+    overall.textContent="ยังยืนยันผลไม่ได้";
+    const parts=[];
+    if(uncertain.length)parts.push(`OCR ไม่ชัวร์: ${uncertain.join(", ")}`);
+    if(missing.length)parts.push(`อ่านไม่ครบ: ${missing.join(", ")}`);
+    if(corrected.length)parts.push(`แก้ OCR ได้: ${corrected.join(", ")}`);
+    sum.textContent=parts.join(" | ");
+  }
+
+  document.querySelector("#results").classList.remove("hidden");
 }
 
 document.querySelector("#resetBtn").addEventListener("click",()=>location.reload());
