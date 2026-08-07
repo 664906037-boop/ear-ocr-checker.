@@ -203,6 +203,41 @@ function crop(side,field){
   return c;
 }
 
+
+function sharpenCanvas(src){
+  const out=document.createElement("canvas");
+  out.width=src.width;
+  out.height=src.height;
+
+  const ctx=out.getContext("2d",{willReadFrequently:true});
+  ctx.drawImage(src,0,0);
+
+  const img=ctx.getImageData(0,0,out.width,out.height);
+  const d=img.data;
+  const copy=new Uint8ClampedArray(d);
+  const w=out.width,h=out.height;
+  const idx=(x,y)=>(y*w+x)*4;
+
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      const i=idx(x,y);
+      for(let c=0;c<3;c++){
+        const v=
+          copy[i+c]*5
+          -copy[idx(x-1,y)+c]
+          -copy[idx(x+1,y)+c]
+          -copy[idx(x,y-1)+c]
+          -copy[idx(x,y+1)+c];
+
+        d[i+c]=Math.max(0,Math.min(255,v));
+      }
+    }
+  }
+
+  ctx.putImageData(img,0,0);
+  return out;
+}
+
 function prep(src,mode,threshold=190){
   let base=mode.startsWith("sharp")?sharpenCanvas(src):src;
   const c=document.createElement("canvas");c.width=base.width;c.height=base.height;

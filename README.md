@@ -1,3 +1,7 @@
+# V16.1 Bug Fix
+
+แก้ข้อผิดพลาด `sharpenCanvas is not defined` โดยเพิ่มฟังก์ชัน sharpen ที่ขาดหายไปใน `app.js`
+
 # EAR Vehicle Checker — Auto Compare V16
 
 V16 คือเวอร์ชันใช้งานประจำจาก OCR Engine V15
