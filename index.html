@@ -3,20 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>EAR Vehicle Checker V9</title>
+  <title>EAR Vehicle Checker V17</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
 </head>
 <body>
 <main class="wrap">
   <header class="hero">
     <div>
       <p class="eyebrow">EAR DOCUMENT CHECKER</p>
-      <h1>ตรวจสอบข้อมูลเอกสาร 2 ไฟล์</h1>
-      <p>อัปโหลดเอกสาร 2 ไฟล์ แล้วระบบอ่านและเปรียบเทียบ CONTAINER NUMBER, SEAL NO และ BOOKING โดยอัตโนมัติ</p>
+      <h1>ตรวจสอบเอกสาร 2 ไฟล์</h1>
+      <p>ตรวจ CONTAINER NUMBER, SEAL NO และ BOOKING แล้วพิมพ์แบบฟอร์มข้อมูล 2 เมื่อผ่าน</p>
     </div>
-    <span class="badge">AUTO COMPARE V16</span>
+    <span class="badge">REFERENCE OCR V17</span>
   </header>
 
   <section class="upload-grid">
@@ -24,78 +23,52 @@
       <div class="card-head"><h2>ข้อมูล 1 — ใบ EAR</h2><span class="num">1</span></div>
       <label class="drop">
         <input id="file1" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf">
-        <strong>เลือกหรือลากไฟล์มาวาง</strong>
-        <span>PDF, JPG, JPEG, PNG หรือ WEBP</span>
+        <strong>เลือกไฟล์ EAR</strong>
+        <span>PDF / JPG / JPEG / PNG / WEBP</span>
         <small id="name1">ยังไม่ได้เลือกไฟล์</small>
       </label>
-      <div class="preview-wrap"><canvas id="preview1"></canvas><span id="placeholder1">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
-      <button class="calibrate" data-side="0">ปรับกรอบขั้นสูง — ข้อมูล 1</button>
+      <div class="preview"><canvas id="preview1"></canvas><span id="ph1">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
     </div>
 
     <div class="card">
       <div class="card-head"><h2>ข้อมูล 2 — แบบฟอร์มควบคุมรถ</h2><span class="num">2</span></div>
       <label class="drop">
         <input id="file2" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf">
-        <strong>เลือกหรือลากไฟล์มาวาง</strong>
-        <span>PDF, JPG, JPEG, PNG หรือ WEBP</span>
+        <strong>เลือกไฟล์แบบฟอร์มควบคุมรถ</strong>
+        <span>PDF / JPG / JPEG / PNG / WEBP</span>
         <small id="name2">ยังไม่ได้เลือกไฟล์</small>
       </label>
-      <div class="preview-wrap"><canvas id="preview2"></canvas><span id="placeholder2">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
-      <button class="calibrate" data-side="1">ปรับกรอบขั้นสูง — ข้อมูล 2</button>
+      <div class="preview"><canvas id="preview2"></canvas><span id="ph2">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
     </div>
   </section>
 
-
-  <section class="auto-note">
-    <strong>โหมดอัตโนมัติ:</strong>
-    ตั้งค่ากรอบเพียงครั้งแรกต่อเว็บไซต์ จากนั้นระบบจะจำและอ่านอัตโนมัติทุกครั้ง
-    ถ้าปุ่มขึ้น ✓ กรอบพร้อมใช้งาน คุณแค่อัปโหลด 2 ไฟล์แล้วกดตรวจได้เลย
-  </section>
-
-  <section class="actions-card">
+  <section class="actions">
     <button id="checkBtn" class="primary">เริ่มอ่านและเปรียบเทียบ</button>
     <button id="resetBtn" class="secondary">ล้างข้อมูล</button>
-    <div id="progressWrap" class="progress-wrap hidden">
+    <button id="printBtn" class="print hidden">พิมพ์แบบฟอร์มข้อมูล 2</button>
+
+    <div id="progressWrap" class="hidden">
       <div class="progress"><div id="bar"></div></div>
-      <div class="progress-row"><span id="progressText">กำลังอ่าน...</span><span id="progressPct">0%</span></div>
+      <div class="progress-row"><span id="progressText">กำลังประมวลผล...</span><span id="progressPct">0%</span></div>
     </div>
     <div id="error" class="error hidden"></div>
   </section>
 
-  <section id="results" class="results-card hidden">
+  <section id="results" class="results hidden">
     <div class="result-head">
       <div><p class="eyebrow blue">COMPARISON RESULT</p><h2>ผลการตรวจสอบ</h2></div>
-      <span id="overall" class="overall fail">ยังไม่ตรวจสอบ</span>
+      <span id="overall" class="overall">ยังไม่ตรวจสอบ</span>
     </div>
 
     <table>
-      <thead><tr><th>หัวข้อ</th><th>ข้อมูล 1 — ใบ EAR</th><th>ข้อมูล 2 — แบบฟอร์มควบคุมรถ</th><th>ผลตรวจ</th></tr></thead>
+      <thead>
+        <tr><th>หัวข้อ</th><th>ข้อมูล 1 — ใบ EAR</th><th>ข้อมูล 2 — แบบฟอร์มควบคุมรถ</th><th>ผลตรวจ</th></tr>
+      </thead>
       <tbody id="tbody"></tbody>
     </table>
-
-    <div id="mismatchSummary" class="summary"></div>
+    <div id="summary" class="summary"></div>
   </section>
 </main>
-
-<div id="modal" class="modal hidden">
-  <div class="modal-card">
-    <div class="modal-head">
-      <div><p class="eyebrow blue">CALIBRATION</p><h2 id="modalTitle">กำหนดกรอบ</h2></div>
-      <button id="closeModal" class="close">×</button>
-    </div>
-    <p>เลือกหัวข้อ แล้วลากกรอบ <b>เฉพาะค่าจริง</b> บนภาพ เช่นครอบเฉพาะ <code>TCKU4852578</code></p>
-    <div class="field-buttons">
-      <button data-field="containerNumber" class="field active">1 CONTAINER NUMBER</button>
-      <button data-field="sealNo" class="field">2 SEAL NO</button>
-      <button data-field="booking" class="field">3 BOOKING</button>
-    </div>
-    <div class="calibration-stage"><canvas id="calCanvas"></canvas></div>
-    <div class="modal-actions">
-      <button id="clearCurrent" class="secondary">ล้างกรอบของเอกสารนี้</button>
-      <button id="saveCalibration" class="primary">บันทึกกรอบ</button>
-    </div>
-  </div>
-</div>
 
 <script type="module" src="app.js"></script>
 </body>
