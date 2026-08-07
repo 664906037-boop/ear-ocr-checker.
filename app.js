@@ -1,6 +1,33 @@
 const pdfjsLib=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const fields=["containerNumber","sealNo","booking"],labels={containerNumber:"CONTAINER NUMBER",sealNo:"SEAL NO",booking:"BOOKING"};
-let files=[null,null],images=[null,null],boxes=[JSON.parse(localStorage.getItem("roi_side_0")||"{}"),JSON.parse(localStorage.getItem("roi_side_1")||"{}")];
+const DEFAULT_BOXES=[
+  {
+    // File 1 — EAR (จากตัวอย่าง EAR ที่ใช้จูน V15)
+    containerNumber:{x:0.145,y:0.285,w:0.255,h:0.055},
+    sealNo:{x:0.145,y:0.365,w:0.225,h:0.052},
+    booking:{x:0.585,y:0.350,w:0.270,h:0.055}
+  },
+  {
+    // File 2 — แบบฟอร์มควบคุมรถ
+    containerNumber:{x:0.205,y:0.278,w:0.250,h:0.043},
+    booking:{x:0.205,y:0.303,w:0.270,h:0.043},
+    sealNo:{x:0.205,y:0.338,w:0.245,h:0.043}
+  }
+];
+
+function loadBoxes(side){
+  const saved=localStorage.getItem(`roi_side_${side}`);
+  if(saved){
+    try{
+      const parsed=JSON.parse(saved);
+      const keys=["containerNumber","sealNo","booking"];
+      if(keys.every(k=>parsed&&parsed[k])) return parsed;
+    }catch(e){}
+  }
+  return JSON.parse(JSON.stringify(DEFAULT_BOXES[side]));
+}
+
+let files=[null,null],images=[null,null],boxes=[loadBoxes(0),loadBoxes(1)];
 let modalSide=0,activeField="containerNumber",drawing=false,start=null,tempBoxes={};
 const cal=document.querySelector("#calCanvas"),cctx=cal.getContext("2d");
 const colors={containerNumber:"#ef4444",sealNo:"#22c55e",booking:"#3b82f6"};
@@ -127,26 +154,53 @@ document.querySelector("#clearCurrent").addEventListener("click",()=>{tempBoxes=
 document.querySelector("#saveCalibration").addEventListener("click",()=>{if(fields.some(k=>!tempBoxes[k])){alert("กรุณากำหนดกรอบทั้ง 3 หัวข้อ");return}boxes[modalSide]=JSON.parse(JSON.stringify(tempBoxes));localStorage.setItem(`roi_side_${modalSide}`,JSON.stringify(boxes[modalSide]));document.querySelector("#modal").classList.add("hidden")});
 document.querySelector("#closeModal").addEventListener("click",()=>document.querySelector("#modal").classList.add("hidden"));
 
-function crop(side,field){
-  const img=images[side],b=boxes[side][field];if(!img||!b)return null;
-  const sx=Math.round(b.x*img.naturalWidth),sy=Math.round(b.y*img.naturalHeight),sw=Math.round(b.w*img.naturalWidth),sh=Math.round(b.h*img.naturalHeight),scale=12,c=document.createElement("canvas");
-  c.width=Math.max(1,sw*scale);c.height=Math.max(1,sh*scale);
-  const x=c.getContext("2d",{willReadFrequently:true});x.imageSmoothingEnabled=true;x.imageSmoothingQuality="high";x.drawImage(img,sx,sy,sw,sh,0,0,c.width,c.height);return c
+
+function normalizedSourceImage(side){
+  const img=images[side];
+  if(!img) return null;
+
+  // Keep a consistent document coordinate system.
+  // V16 assumes the full page is visible; fit it into a fixed canvas
+  // so the embedded ROI percentages are stable across resolutions.
+  const targetW=1600;
+  const aspect=img.naturalHeight/img.naturalWidth;
+  const targetH=Math.round(targetW*aspect);
+
+  const c=document.createElement("canvas");
+  c.width=targetW;
+  c.height=targetH;
+
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.fillStyle="#fff";
+  x.fillRect(0,0,c.width,c.height);
+  x.imageSmoothingEnabled=true;
+  x.imageSmoothingQuality="high";
+  x.drawImage(img,0,0,c.width,c.height);
+
+  return c;
 }
 
-function sharpenCanvas(src){
-  const out=document.createElement("canvas");out.width=src.width;out.height=src.height;
-  const ctx=out.getContext("2d",{willReadFrequently:true});ctx.drawImage(src,0,0);
-  const img=ctx.getImageData(0,0,out.width,out.height),d=img.data,copy=new Uint8ClampedArray(d),w=out.width,h=out.height;
-  const idx=(x,y)=>(y*w+x)*4;
-  for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
-    const i=idx(x,y);
-    for(let c=0;c<3;c++){
-      const v=copy[i+c]*5-copy[idx(x-1,y)+c]-copy[idx(x+1,y)+c]-copy[idx(x,y-1)+c]-copy[idx(x,y+1)+c];
-      d[i+c]=Math.max(0,Math.min(255,v))
-    }
-  }
-  ctx.putImageData(img,0,0);return out
+function crop(side,field){
+  const src=normalizedSourceImage(side),b=boxes[side][field];
+  if(!src||!b)return null;
+
+  const sx=Math.round(b.x*src.width);
+  const sy=Math.round(b.y*src.height);
+  const sw=Math.round(b.w*src.width);
+  const sh=Math.round(b.h*src.height);
+
+  // Larger upscale helps low-resolution EAR photos.
+  const scale=10;
+  const c=document.createElement("canvas");
+  c.width=Math.max(1,sw*scale);
+  c.height=Math.max(1,sh*scale);
+
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.imageSmoothingEnabled=true;
+  x.imageSmoothingQuality="high";
+  x.drawImage(src,sx,sy,sw,sh,0,0,c.width,c.height);
+
+  return c;
 }
 
 function prep(src,mode,threshold=190){
@@ -526,7 +580,9 @@ function setProgress(p,t){document.querySelector("#progressWrap").classList.remo
 document.querySelector("#checkBtn").addEventListener("click",async()=>{
   const err=document.querySelector("#error");err.classList.add("hidden");
   if(!files[0]||!files[1]){err.textContent="กรุณาเลือกไฟล์ทั้ง 2 ฝั่ง";err.classList.remove("hidden");return}
-  if([0,1].some(s=>fields.some(k=>!boxes[s]?.[k]))){err.textContent="กรุณากำหนดกรอบอ่านของข้อมูล 1 และข้อมูล 2 ให้ครบก่อน";err.classList.remove("hidden");return}
+  if([0,1].some(s=>fields.some(k=>!boxes[s]?.[k]))){
+    boxes=[loadBoxes(0),loadBoxes(1)];
+  }
 
   const btn=document.querySelector("#checkBtn");btn.disabled=true;
   try{

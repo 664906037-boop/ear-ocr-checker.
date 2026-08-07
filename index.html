@@ -14,9 +14,9 @@
     <div>
       <p class="eyebrow">EAR DOCUMENT CHECKER</p>
       <h1>ตรวจสอบข้อมูลเอกสาร 2 ไฟล์</h1>
-      <p>เปรียบเทียบ CONTAINER NUMBER, SEAL NO และ BOOKING</p>
+      <p>อัปโหลดเอกสาร 2 ไฟล์ แล้วระบบอ่านและเปรียบเทียบ CONTAINER NUMBER, SEAL NO และ BOOKING โดยอัตโนมัติ</p>
     </div>
-    <span class="badge">CALIBRATED OCR</span>
+    <span class="badge">AUTO COMPARE V16</span>
   </header>
 
   <section class="upload-grid">
@@ -29,7 +29,7 @@
         <small id="name1">ยังไม่ได้เลือกไฟล์</small>
       </label>
       <div class="preview-wrap"><canvas id="preview1"></canvas><span id="placeholder1">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
-      <button class="calibrate" data-side="0">กำหนด/ปรับกรอบอ่านข้อมูล 1</button>
+      <button class="calibrate" data-side="0">ปรับกรอบขั้นสูง — ข้อมูล 1</button>
     </div>
 
     <div class="card">
@@ -41,8 +41,15 @@
         <small id="name2">ยังไม่ได้เลือกไฟล์</small>
       </label>
       <div class="preview-wrap"><canvas id="preview2"></canvas><span id="placeholder2">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
-      <button class="calibrate" data-side="1">กำหนด/ปรับกรอบอ่านข้อมูล 2</button>
+      <button class="calibrate" data-side="1">ปรับกรอบขั้นสูง — ข้อมูล 2</button>
     </div>
+  </section>
+
+
+  <section class="auto-note">
+    <strong>โหมดอัตโนมัติ:</strong>
+    ไม่ต้องกำหนดกรอบทุกครั้ง ระบบใช้ตำแหน่งมาตรฐานของใบ EAR และแบบฟอร์มควบคุมรถให้เอง
+    หากเอกสารถ่ายเอียง/ครอปต่างจากปกติมาก ค่อยใช้ปุ่ม “ปรับกรอบขั้นสูง”
   </section>
 
   <section class="actions-card">
