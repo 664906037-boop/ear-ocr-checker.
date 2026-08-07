@@ -3,71 +3,93 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>EAR OCR Calibration V2</title>
+  <title>EAR Vehicle Checker V9</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
 </head>
 <body>
-  <main class="wrap">
-    <header class="hero">
-      <p class="eyebrow">EAR OCR CALIBRATION V2</p>
-      <h1>กำหนดกรอบอ่านข้อมูลด้วยตัวเอง</h1>
-      <p>ลากกรอบ 3 จุดครั้งเดียว แล้วระบบจะ OCR เฉพาะตำแหน่งที่คุณกำหนด</p>
-    </header>
+<main class="wrap">
+  <header class="hero">
+    <div>
+      <p class="eyebrow">EAR DOCUMENT CHECKER</p>
+      <h1>ตรวจสอบข้อมูลเอกสาร 2 ไฟล์</h1>
+      <p>เปรียบเทียบ CONTAINER NUMBER, SEAL NO และ BOOKING</p>
+    </div>
+    <span class="badge">CALIBRATED OCR</span>
+  </header>
 
-    <section class="panel">
-      <div class="steps">
-        <span>1. เลือกรูป EAR</span><span>2. เลือกหัวข้อ</span>
-        <span>3. ลากกรอบบนภาพ</span><span>4. กดทดสอบ OCR</span>
-      </div>
+  <section class="upload-grid">
+    <div class="card">
+      <div class="card-head"><h2>ข้อมูล 1 — ใบ EAR</h2><span class="num">1</span></div>
+      <label class="drop">
+        <input id="file1" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf">
+        <strong>เลือกหรือลากไฟล์มาวาง</strong>
+        <span>PDF, JPG, JPEG, PNG หรือ WEBP</span>
+        <small id="name1">ยังไม่ได้เลือกไฟล์</small>
+      </label>
+      <div class="preview-wrap"><canvas id="preview1"></canvas><span id="placeholder1">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
+      <button class="calibrate" data-side="0">กำหนด/ปรับกรอบอ่านข้อมูล 1</button>
+    </div>
 
-      <div class="toolbar">
-        <label class="file-btn">เลือกรูป EAR<input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp"></label>
-        <button data-field="containerNumber" class="field active">1 — CONTAINER NUMBER</button>
-        <button data-field="sealNo" class="field">2 — SEAL NO</button>
-        <button data-field="booking" class="field">3 — BOOKING</button>
-        <button id="clearBoxes" class="secondary">ล้างกรอบ</button>
-        <button id="testBtn" class="primary">ทดสอบ OCR 3 กรอบ</button>
-      </div>
+    <div class="card">
+      <div class="card-head"><h2>ข้อมูล 2 — แบบฟอร์มควบคุมรถ</h2><span class="num">2</span></div>
+      <label class="drop">
+        <input id="file2" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf">
+        <strong>เลือกหรือลากไฟล์มาวาง</strong>
+        <span>PDF, JPG, JPEG, PNG หรือ WEBP</span>
+        <small id="name2">ยังไม่ได้เลือกไฟล์</small>
+      </label>
+      <div class="preview-wrap"><canvas id="preview2"></canvas><span id="placeholder2">ตัวอย่างเอกสารจะแสดงที่นี่</span></div>
+      <button class="calibrate" data-side="1">กำหนด/ปรับกรอบอ่านข้อมูล 2</button>
+    </div>
+  </section>
 
-      <p id="fileName" class="muted">ยังไม่ได้เลือกรูป</p>
-      <div id="message" class="message">เลือกรูป EAR แล้วลากกรอบเฉพาะ “ค่าจริง” ของแต่ละหัวข้อ</div>
-    </section>
+  <section class="actions-card">
+    <button id="checkBtn" class="primary">เริ่มอ่านและเปรียบเทียบ</button>
+    <button id="resetBtn" class="secondary">ล้างข้อมูล</button>
+    <div id="progressWrap" class="progress-wrap hidden">
+      <div class="progress"><div id="bar"></div></div>
+      <div class="progress-row"><span id="progressText">กำลังอ่าน...</span><span id="progressPct">0%</span></div>
+    </div>
+    <div id="error" class="error hidden"></div>
+  </section>
 
-    <section class="panel workspace">
-      <div id="canvasWrap">
-        <canvas id="docCanvas"></canvas>
-        <div id="emptyState">เลือกรูป EAR เพื่อเริ่มกำหนดกรอบ</div>
-      </div>
-    </section>
+  <section id="results" class="results-card hidden">
+    <div class="result-head">
+      <div><p class="eyebrow blue">COMPARISON RESULT</p><h2>ผลการตรวจสอบ</h2></div>
+      <span id="overall" class="overall fail">ยังไม่ตรวจสอบ</span>
+    </div>
 
-    <section class="panel">
-      <h2>ตำแหน่งที่กำหนด</h2>
-      <div class="box-summary">
-        <div><strong>1 CONTAINER NUMBER</strong><span id="box-containerNumber">ยังไม่กำหนด</span></div>
-        <div><strong>2 SEAL NO</strong><span id="box-sealNo">ยังไม่กำหนด</span></div>
-        <div><strong>3 BOOKING</strong><span id="box-booking">ยังไม่กำหนด</span></div>
-      </div>
-    </section>
+    <table>
+      <thead><tr><th>หัวข้อ</th><th>ข้อมูล 1 — ใบ EAR</th><th>ข้อมูล 2 — แบบฟอร์มควบคุมรถ</th><th>ผลตรวจ</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
 
-    <section class="panel">
-      <h2>ผลทดสอบ OCR</h2>
-      <div id="progressWrap" class="hidden">
-        <div class="progress"><div id="bar"></div></div>
-        <p id="progressText">กำลังอ่าน...</p>
-      </div>
-      <div class="results">
-        <div class="result"><span>CONTAINER NUMBER</span><input id="out-containerNumber" readonly><small id="raw-containerNumber"></small></div>
-        <div class="result"><span>SEAL NO</span><input id="out-sealNo" readonly><small id="raw-sealNo"></small></div>
-        <div class="result"><span>BOOKING</span><input id="out-booking" readonly><small id="raw-booking"></small></div>
-      </div>
-    </section>
+    <div id="mismatchSummary" class="summary"></div>
+  </section>
+</main>
 
-    <section class="panel note">
-      <strong>สำคัญ:</strong> ลากกรอบเฉพาะค่าจริง เช่น <code>ONEU2944860</code> ไม่ต้องครอบคำว่า CONTAINER NUMBER
-      ระบบจะบันทึกตำแหน่งไว้ใน Browser เครื่องนี้โดยอัตโนมัติ
-    </section>
-  </main>
-  <script type="module" src="app.js"></script>
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div><p class="eyebrow blue">CALIBRATION</p><h2 id="modalTitle">กำหนดกรอบ</h2></div>
+      <button id="closeModal" class="close">×</button>
+    </div>
+    <p>เลือกหัวข้อ แล้วลากกรอบ <b>เฉพาะค่าจริง</b> บนภาพ เช่นครอบเฉพาะ <code>TCKU4852578</code></p>
+    <div class="field-buttons">
+      <button data-field="containerNumber" class="field active">1 CONTAINER NUMBER</button>
+      <button data-field="sealNo" class="field">2 SEAL NO</button>
+      <button data-field="booking" class="field">3 BOOKING</button>
+    </div>
+    <div class="calibration-stage"><canvas id="calCanvas"></canvas></div>
+    <div class="modal-actions">
+      <button id="clearCurrent" class="secondary">ล้างกรอบของเอกสารนี้</button>
+      <button id="saveCalibration" class="primary">บันทึกกรอบ</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
 </body>
 </html>
