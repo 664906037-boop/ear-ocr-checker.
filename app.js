@@ -1,30 +1,30 @@
 const pdfjsLib=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const fields=["containerNumber","sealNo","booking"],labels={containerNumber:"CONTAINER NUMBER",sealNo:"SEAL NO",booking:"BOOKING"};
-const DEFAULT_BOXES=[
-  {
-    // File 1 — EAR (จากตัวอย่าง EAR ที่ใช้จูน V15)
-    containerNumber:{x:0.145,y:0.285,w:0.255,h:0.055},
-    sealNo:{x:0.145,y:0.365,w:0.225,h:0.052},
-    booking:{x:0.585,y:0.350,w:0.270,h:0.055}
-  },
-  {
-    // File 2 — แบบฟอร์มควบคุมรถ
-    containerNumber:{x:0.205,y:0.278,w:0.250,h:0.043},
-    booking:{x:0.205,y:0.303,w:0.270,h:0.043},
-    sealNo:{x:0.205,y:0.338,w:0.245,h:0.043}
-  }
-];
+const DEFAULT_BOXES=[null,null];
 
 function loadBoxes(side){
-  const saved=localStorage.getItem(`roi_side_${side}`);
-  if(saved){
+  // Calibration is intentionally tied to the current website origin.
+  // Never silently use guessed ROI: a wrong crop produces confident but wrong OCR.
+  const keys=[
+    `roi_side_${side}`,
+    `ear_roi_side_${side}`,
+    `calibration_side_${side}`
+  ];
+
+  for(const key of keys){
+    const saved=localStorage.getItem(key);
+    if(!saved) continue;
+
     try{
       const parsed=JSON.parse(saved);
-      const keys=["containerNumber","sealNo","booking"];
-      if(keys.every(k=>parsed&&parsed[k])) return parsed;
+      const required=["containerNumber","sealNo","booking"];
+      if(required.every(k=>parsed&&parsed[k])){
+        return parsed;
+      }
     }catch(e){}
   }
-  return JSON.parse(JSON.stringify(DEFAULT_BOXES[side]));
+
+  return {};
 }
 
 let files=[null,null],images=[null,null],boxes=[loadBoxes(0),loadBoxes(1)];
@@ -151,7 +151,11 @@ cal.addEventListener("pointerdown",e=>{drawing=true;start=pt(e);cal.setPointerCa
 cal.addEventListener("pointermove",e=>{if(!drawing)return;redrawCal();const p=pt(e);cctx.save();cctx.strokeStyle=colors[activeField];cctx.lineWidth=3;cctx.setLineDash([7,5]);cctx.strokeRect(start.x,start.y,p.x-start.x,p.y-start.y);cctx.restore()});
 cal.addEventListener("pointerup",e=>{if(!drawing)return;drawing=false;const p=pt(e),x=Math.min(start.x,p.x),y=Math.min(start.y,p.y),w=Math.abs(p.x-start.x),h=Math.abs(p.y-start.y);if(w>8&&h>8)tempBoxes[activeField]={x:x/cal.width,y:y/cal.height,w:w/cal.width,h:h/cal.height};redrawCal()});
 document.querySelector("#clearCurrent").addEventListener("click",()=>{tempBoxes={};redrawCal()});
-document.querySelector("#saveCalibration").addEventListener("click",()=>{if(fields.some(k=>!tempBoxes[k])){alert("กรุณากำหนดกรอบทั้ง 3 หัวข้อ");return}boxes[modalSide]=JSON.parse(JSON.stringify(tempBoxes));localStorage.setItem(`roi_side_${modalSide}`,JSON.stringify(boxes[modalSide]));document.querySelector("#modal").classList.add("hidden")});
+document.querySelector("#saveCalibration").addEventListener("click",()=>{if(fields.some(k=>!tempBoxes[k])){alert("กรุณากำหนดกรอบทั้ง 3 หัวข้อ");return}boxes[modalSide]=JSON.parse(JSON.stringify(tempBoxes));
+  localStorage.setItem(`roi_side_${modalSide}`,JSON.stringify(boxes[modalSide]));
+  localStorage.setItem(`roi_side_${modalSide}_saved_at`,new Date().toISOString());
+  updateCalibrationStatus();
+  document.querySelector("#modal").classList.add("hidden")});
 document.querySelector("#closeModal").addEventListener("click",()=>document.querySelector("#modal").classList.add("hidden"));
 
 
@@ -610,13 +614,39 @@ function verdict(field,p){
   return{status:"fail",text:"ไม่ตรงกัน"};
 }
 
+
+function hasCalibration(side){
+  return fields.every(k=>boxes[side]&&boxes[side][k]);
+}
+
+function updateCalibrationStatus(){
+  for(let side=0;side<2;side++){
+    const btn=document.querySelector(`.calibrate[data-side="${side}"]`);
+    if(!btn) continue;
+
+    if(hasCalibration(side)){
+      btn.textContent=`✓ กรอบพร้อมใช้งาน — ปรับกรอบขั้นสูง ${side+1}`;
+      btn.style.background="#ecfdf3";
+      btn.style.color="#067647";
+    }else{
+      btn.textContent=`ตั้งค่ากรอบครั้งแรก — ข้อมูล ${side+1}`;
+      btn.style.background="#fff7ed";
+      btn.style.color="#c2410c";
+    }
+  }
+}
+
 function setProgress(p,t){document.querySelector("#progressWrap").classList.remove("hidden");document.querySelector("#bar").style.width=`${p}%`;document.querySelector("#progressPct").textContent=`${Math.round(p)}%`;document.querySelector("#progressText").textContent=t}
 
 document.querySelector("#checkBtn").addEventListener("click",async()=>{
   const err=document.querySelector("#error");err.classList.add("hidden");
   if(!files[0]||!files[1]){err.textContent="กรุณาเลือกไฟล์ทั้ง 2 ฝั่ง";err.classList.remove("hidden");return}
-  if([0,1].some(s=>fields.some(k=>!boxes[s]?.[k]))){
-    boxes=[loadBoxes(0),loadBoxes(1)];
+  const missingSides=[0,1].filter(s=>fields.some(k=>!boxes[s]?.[k]));
+  if(missingSides.length){
+    err.textContent=`ต้องตั้งค่ากรอบครั้งแรกก่อน: ${missingSides.map(s=>s===0?"ข้อมูล 1 — ใบ EAR":"ข้อมูล 2 — แบบฟอร์มควบคุมรถ").join(" และ ")}`;
+    err.classList.remove("hidden");
+    if(images[missingSides[0]]) openCalibration(missingSides[0]);
+    return;
   }
 
   const btn=document.querySelector("#checkBtn");btn.disabled=true;
@@ -691,4 +721,5 @@ function renderResolved(resolved){
   document.querySelector("#results").classList.remove("hidden");
 }
 
+updateCalibrationStatus();
 document.querySelector("#resetBtn").addEventListener("click",()=>location.reload());
