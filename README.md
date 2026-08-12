@@ -1,20 +1,33 @@
-# EAR Vehicle Checker — Conservative Scan V22
+# EAR Vehicle Checker V23 Production
 
-V22 แก้ regression จาก V21 โดยกลับมาใช้แนวทางของ V20 ที่เร็วและเสถียร แล้วเพิ่มความแม่นแบบ conservative
+## ความสามารถ
+- Upload 2 ไฟล์: EAR และแบบฟอร์มควบคุมรถ
+- รองรับ PDF/JPG/JPEG/PNG/WEBP
+- ตรวจ 3 หัวข้อ:
+  - CONTAINER NUMBER
+  - SEAL NO
+  - BOOKING
+- OCR แบบ Label + Value Detection
+- Container ตรวจ ISO 6346
+- Booking/Seal มี pattern correction
+- แสดง ตรงกัน / OCR ไม่ชัวร์ / ไม่ตรงกัน
+- เมื่อผ่านทั้ง 3 หัวข้อ ปุ่ม Print จะเปิดใช้งาน
+- Print ใช้ไฟล์ข้อมูล 2 ตัวจริง
 
-## หลักสำคัญ
+## วิธีติดตั้ง
+1. แตก ZIP
+2. Upload 5 ไฟล์ขึ้น GitHub
+3. Commit changes
+4. Vercel > Import Project
+5. Framework Preset = Other
+6. Build Command = ว่าง
+7. Output Directory = ว่าง
+8. Install Command = ว่าง
+9. Deploy
 
-1. อ่านตำแหน่งเดิมก่อน
-2. ถ้าค่ามีรูปแบบถูกต้อง + confidence พอ -> LOCK ผลทันที
-3. ไม่ให้ OCR จากตำแหน่งรอบข้างมาแทนค่าที่ดีอยู่แล้ว
-4. สแกนซ้าย/ขวา/บน/ล่าง/ขยาย เฉพาะ field ที่อ่านไม่มั่นใจ
-5. Candidate จากตำแหน่งเดิมได้คะแนนสูงกว่า fallback
-6. ถ้าสองฝั่งอ่านได้แข็งแรงทั้งคู่แต่ค่าต่างกัน ระบบจะไม่ auto-correct ให้เหมือนกัน
-
-## Validation
-- Container: ISO 6346
-- Seal: THxx + digits / 4 letters + digits
-- Booking: SGZG... / BSGZC... / 4-5 letters + digits
-
-## Workflow
-Calibration ครั้งแรก -> ใช้งานประจำ Upload 2 files -> Compare -> Print เมื่อผ่าน
+## ไฟล์
+- index.html
+- app.js
+- styles.css
+- vercel.json
+- README.md
